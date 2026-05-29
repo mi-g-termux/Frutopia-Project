@@ -222,6 +222,10 @@ export interface PaymentSettings {
   bKashAutoLogoImageUrl?: string;
   nagadAutoDisplayName?: string;
   nagadAutoLogoImageUrl?: string;
+  sslCommerzDisplayName?: string;
+  sslCommerzLogoImageUrl?: string;
+  razorpayDisplayName?: string;
+  razorpayLogoImageUrl?: string;
 
   codEnabled: boolean;
   bKashEnabled: boolean;

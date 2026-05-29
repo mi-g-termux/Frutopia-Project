@@ -6,7 +6,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { useToast } from './Toast';
-import { X, Minus, Plus, Trash2, Tag, Ticket, CreditCard, ShoppingBag, Landmark, Sparkles, Printer, Phone, Shield, CheckCircle2 } from 'lucide-react';
+import { X, Minus, Plus, Trash2, Tag, Ticket, CreditCard, ShoppingBag, Landmark, Printer, Phone, Shield, CheckCircle2 } from 'lucide-react';
 import { Order, CartItem } from '../types';
 import { BkashLogo, NagadLogo, StripeLogo, PaypalLogo, VisaMastercardLogo, RocketLogo, QuirkyFruityLogo } from './PaymentLogos';
 import { COUNTRY_PHONE_RULES, findRule, validatePhone, toE164 } from '../lib/phoneValidation';
@@ -16,6 +16,65 @@ interface CartModalProps {
   onClose: () => void;
   emailVerified?: boolean;
 }
+
+type PaymentOption = {
+  id: string;
+  fallbackLabel: string;
+  icon: React.ReactNode;
+  enabled: boolean;
+  displayName?: string | null;
+  logoUrl?: string | null;
+};
+
+const cleanSetting = (value?: string | null) => (typeof value === 'string' ? value.trim() : '');
+
+const DEFAULT_BRANDING_LABELS = new Set([
+  'cash on delivery',
+  'bkash manual',
+  'bkash (manual)',
+  'bkash instant (auto)',
+  'bkash (auto)',
+  'nagad manual',
+  'nagad (manual)',
+  'nagad instant (auto)',
+  'nagad (auto)',
+  'paypal express',
+  'paypal',
+  'stripe card',
+  'card (stripe)',
+  'sslcommerz',
+  'razorpay',
+  'bank transfer',
+  'rocket manual',
+  'rocket (manual)',
+]);
+
+const getPaymentButtonLabel = (displayName: string | null | undefined, fallbackLabel: string, logoUrl: string) => {
+  const label = cleanSetting(displayName);
+  if (!label) return logoUrl ? '' : fallbackLabel;
+  if (logoUrl && DEFAULT_BRANDING_LABELS.has(label.toLowerCase())) return '';
+  return label;
+};
+
+const hasEnabledPaymentMethod = (settings: any, method: string) => {
+  switch (method) {
+    case 'COD': return settings?.codEnabled !== false;
+    case 'bKash': return settings?.bKashEnabled === true;
+    case 'Nagad': return settings?.nagadEnabled === true;
+    case 'Rocket': return settings?.rocketEnabled === true;
+    case 'Bank': return settings?.bankEnabled === true;
+    case 'CreditManual': return settings?.creditManualEnabled === true;
+    case 'Stripe': return settings?.stripeEnabled === true;
+    case 'PayPal': return settings?.paypalEnabled === true;
+    case 'bKashAuto': return settings?.bKashAutoEnabled === true;
+    case 'NagadAuto': return settings?.nagadAutoEnabled === true;
+    case 'SSLCommerz': return settings?.sslCommerzEnabled === true;
+    case 'Razorpay': return settings?.razorpayEnabled === true;
+    default: return false;
+  }
+};
+
+const PAYMENT_METHOD_ORDER = ['COD', 'bKash', 'Nagad', 'Rocket', 'Bank', 'CreditManual', 'Stripe', 'PayPal', 'bKashAuto', 'NagadAuto', 'SSLCommerz', 'Razorpay'];
 
 
 // ─── Tiny QR-code renderer (no external lib) ────────────────────────────────
@@ -63,6 +122,7 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
   } = useApp();
 
   const toast = useToast();
+  const handledGatewayCallbackRef = useRef(false);
 
   // ✅ Handle bKash/Nagad/PayPal/SSLCommerz redirect callback — complete pending order on return
   useEffect(() => {
@@ -71,19 +131,17 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
     const nagadStatus   = params.get('nagad');
     const paypalStatus  = params.get('paypal');
     const sslStatus     = params.get('sslcommerz');
+    const gatewayStatus = params.get('status');
+    const bkashPaymentID = params.get('paymentID') || params.get('paymentId') || '';
 
-    const successStatuses = [
-      bkashStatus === 'success',
-      nagadStatus === 'success',
-      sslStatus === 'success',
-    ];
-
-    const failStatuses = [
-      bkashStatus === 'failed',
-      nagadStatus === 'failed',
-      paypalStatus === 'cancelled',
-      sslStatus === 'failed' || sslStatus === 'cancelled',
-    ];
+    const clearPendingPayment = () => {
+      localStorage.removeItem('qf_pending_order');
+      localStorage.removeItem('qf_pending_email');
+      localStorage.removeItem('qf_paypal_order_id');
+      localStorage.removeItem('qf_paypal_client_id');
+      localStorage.removeItem('qf_paypal_client_secret');
+      localStorage.removeItem('qf_paypal_sandbox');
+    };
 
     const completePendingOrder = (methodOverride?: string) => {
       const pendingRaw   = localStorage.getItem('qf_pending_order');
@@ -96,20 +154,66 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
           if (pendingEmail) setCurrentUserEmail(pendingEmail);
           clearCart();
           setPlacedInvoiceOrder(placed);
-          toast.success(`🎉 Payment confirmed! Order ${placed.orderNumber} confirmed.`);
-          localStorage.removeItem('qf_pending_order');
-          localStorage.removeItem('qf_pending_email');
+          toast.success(`Payment confirmed. Order ${placed.orderNumber} confirmed.`);
+          clearPendingPayment();
           window.history.replaceState({}, '', window.location.pathname);
         });
       } catch {
-        localStorage.removeItem('qf_pending_order');
+        clearPendingPayment();
       }
     };
+
+    if ((bkashStatus === 'execute' || bkashPaymentID) && gatewayStatus === 'success') {
+      if (handledGatewayCallbackRef.current || !bkashPaymentID) return;
+      if (!paymentSettings?.bKashAppKey || !paymentSettings?.bKashAppSecret || !paymentSettings?.bKashUsername || !paymentSettings?.bKashPassword) return;
+
+      handledGatewayCallbackRef.current = true;
+      fetch('/api/bkash/execute-payment', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          paymentID: bkashPaymentID,
+          appKey: paymentSettings.bKashAppKey,
+          appSecret: paymentSettings.bKashAppSecret,
+          username: paymentSettings.bKashUsername,
+          password: paymentSettings.bKashPassword,
+          sandboxMode: paymentSettings.bKashSandboxMode ?? true,
+        }),
+      })
+        .then(r => r.json())
+        .then((data: any) => {
+          if (data.success) {
+            completePendingOrder(`bKash (txn: ${data.transactionId || bkashPaymentID})`);
+          } else {
+            toast.error(data.error || 'bKash payment verification failed.');
+            clearPendingPayment();
+            window.history.replaceState({}, '', window.location.pathname);
+          }
+        })
+        .catch(() => {
+          toast.error('bKash payment verification failed. Contact support.');
+          clearPendingPayment();
+          window.history.replaceState({}, '', window.location.pathname);
+        });
+      return;
+    }
+
+    const successStatuses = [
+      bkashStatus === 'success',
+      nagadStatus === 'success',
+      sslStatus === 'success',
+    ];
+
+    const failStatuses = [
+      bkashStatus === 'failed' || gatewayStatus === 'failure' || gatewayStatus === 'cancel',
+      nagadStatus === 'failed',
+      paypalStatus === 'cancelled',
+      sslStatus === 'failed' || sslStatus === 'cancelled',
+    ];
 
     if (successStatuses.some(Boolean)) {
       completePendingOrder();
     } else if (paypalStatus === 'approved') {
-      // PayPal buyer approved — now capture the payment server-side
       const paypalOrderId     = localStorage.getItem('qf_paypal_order_id') || params.get('token') || '';
       const paypalClientId    = localStorage.getItem('qf_paypal_client_id') || '';
       const paypalClientSecret = localStorage.getItem('qf_paypal_client_secret') || '';
@@ -136,8 +240,7 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
               completePendingOrder(`PayPal (txn: ${data.transactionId})`);
             } else {
               toast.error(`PayPal capture failed: ${data.error}`);
-              localStorage.removeItem('qf_pending_order');
-              localStorage.removeItem('qf_pending_email');
+              clearPendingPayment();
               window.history.replaceState({}, '', window.location.pathname);
             }
           })
@@ -148,15 +251,10 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
       }
     } else if (failStatuses.some(Boolean)) {
       toast.error('Payment was cancelled or failed. Please try again.');
-      localStorage.removeItem('qf_pending_order');
-      localStorage.removeItem('qf_pending_email');
-      localStorage.removeItem('qf_paypal_order_id');
-      localStorage.removeItem('qf_paypal_client_id');
-      localStorage.removeItem('qf_paypal_client_secret');
-      localStorage.removeItem('qf_paypal_sandbox');
+      clearPendingPayment();
       window.history.replaceState({}, '', window.location.pathname);
     }
-  }, []);
+  }, [paymentSettings?.bKashAppKey, paymentSettings?.bKashAppSecret, paymentSettings?.bKashUsername, paymentSettings?.bKashPassword, paymentSettings?.bKashSandboxMode, placeOrder, setCurrentUserEmail, clearCart, toast]);
 
   const [couponCode, setCouponCode] = useState('');
   
@@ -249,6 +347,17 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
 
   // Selected payment method
   const [paymentMethod, setPaymentMethod] = useState<string>('COD');
+
+  const isPaymentMethodEnabled = useCallback(
+    (method: string) => hasEnabledPaymentMethod(paymentSettings, method),
+    [paymentSettings],
+  );
+
+  useEffect(() => {
+    if (isPaymentMethodEnabled(paymentMethod)) return;
+    const firstEnabled = PAYMENT_METHOD_ORDER.find((method) => isPaymentMethodEnabled(method));
+    setPaymentMethod(firstEnabled || 'COD');
+  }, [isPaymentMethodEnabled, paymentMethod]);
 
   // Active Placement invoice state
   const [placedInvoiceOrder, setPlacedInvoiceOrder] = useState<Order | null>(null);
@@ -386,7 +495,7 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
 
       if (['bKashAuto', 'NagadAuto', 'PayPal', 'Stripe', 'SSLCommerz', 'Razorpay'].includes(paymentMethod)) {
         // Try real bKash API if credentials are configured
-        if (paymentMethod === 'bKashAuto' && paymentSettings.bKashAppKey && paymentSettings.bKashAppSecret) {
+        if (paymentMethod === 'bKashAuto' && paymentSettings.bKashAppKey && paymentSettings.bKashAppSecret && paymentSettings.bKashUsername && paymentSettings.bKashPassword) {
           try {
             const res = await fetch('/api/bkash/create-payment', {
               method: 'POST',
@@ -399,18 +508,20 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
                 username: paymentSettings.bKashUsername,
                 password: paymentSettings.bKashPassword,
                 sandboxMode: paymentSettings.bKashSandboxMode ?? true,
+                callbackURL: `${window.location.origin}${window.location.pathname}?bkash=execute`,
               }),
             });
-            const data = await res.json() as any;
+            const data = await res.json().catch(() => ({})) as any;
+            if (!res.ok) throw new Error(data.error || `bKash API returned ${res.status}`);
             if (data.bkashURL) {
-              // Save order data to localStorage so callback can complete it
               localStorage.setItem('qf_pending_order', JSON.stringify({ ...orderData, paymentMethod: 'bKash (Auto)', paymentStatus: 'Paid' }));
               localStorage.setItem('qf_pending_email', email.trim().toLowerCase());
               window.location.href = data.bkashURL;
               return;
             }
-          } catch {
-            // fall through to simulation
+          } catch (error: any) {
+            toast.error(error?.message || 'Could not start bKash payment.');
+            return;
           }
         }
 
@@ -460,7 +571,7 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
       // ✅ Save email so review button shows for this user's ordered products
       setCurrentUserEmail(email.trim().toLowerCase());
 
-      toast.success(`🎉 SUCCESS! Order placed successfully. Order Number: ${placedOrder.orderNumber}`);
+      toast.success(`Order placed successfully. Order Number: ${placedOrder.orderNumber}`);
       setPlacedInvoiceOrder(placedOrder);
 
       // ✅ Clear cart after successful order
@@ -495,7 +606,7 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
     };
     const placedOrder = await placeOrder(updatedOrder);
     if (orderInfo.email) setCurrentUserEmail(orderInfo.email.trim().toLowerCase());
-    toast.success(`🎉 Payment confirmed! Order: ${placedOrder.orderNumber}`);
+    toast.success(`Payment confirmed. Order: ${placedOrder.orderNumber}`);
     setPlacedInvoiceOrder(placedOrder);
     clearCart();
     setCustomerName(''); setEmail(''); setPhoneLocal(''); setAddress('');
@@ -1154,31 +1265,44 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
               <div>
                 <label className="block text-[10px] font-bold uppercase text-slate-500 mb-2">Payment Method *</label>
                 <div className="grid grid-cols-2 gap-2">
-                  {[
-                    { id: 'COD',         label: 'Cash on Delivery', icon: <ShoppingBag className="w-4 h-4" />, enabled: paymentSettings.codEnabled !== false },
-                    { id: 'bKash',       label: 'bKash (Manual)',   icon: <BkashLogo className="w-5 h-5" />,   enabled: paymentSettings.bKashEnabled },
-                    { id: 'Nagad',       label: 'Nagad (Manual)',   icon: <NagadLogo className="w-5 h-5" />,   enabled: paymentSettings.nagadEnabled },
-                    { id: 'Rocket',      label: 'Rocket (Manual)',  icon: <RocketLogo className="w-5 h-5" />,  enabled: paymentSettings.rocketEnabled },
-                    { id: 'Bank',        label: 'Bank Transfer',    icon: <Landmark className="w-4 h-4" />,    enabled: paymentSettings.bankEnabled },
-                    { id: 'Stripe',      label: 'Card (Stripe)',    icon: <StripeLogo className="w-5 h-5" />,  enabled: !!paymentSettings.stripePublicKey },
-                    { id: 'PayPal',      label: 'PayPal',           icon: <PaypalLogo className="w-5 h-5" />,  enabled: !!paymentSettings.paypalClientId },
-                    { id: 'bKashAuto',   label: 'bKash (Auto)',     icon: <BkashLogo className="w-5 h-5" />,   enabled: !!paymentSettings.bKashAppKey },
-                    { id: 'NagadAuto',   label: 'Nagad (Auto)',     icon: <NagadLogo className="w-5 h-5" />,   enabled: !!paymentSettings.nagadMerchantId },
-                    { id: 'SSLCommerz',  label: 'SSLCommerz',       icon: <CreditCard className="w-4 h-4" />,  enabled: !!paymentSettings.sslCommerzStoreId },
-                    { id: 'Razorpay',    label: 'Razorpay',         icon: <CreditCard className="w-4 h-4" />,  enabled: !!paymentSettings.razorpayKeyId },
-                  ].filter(opt => opt.enabled).map(opt => (
+                  {([
+                    { id: 'COD',         fallbackLabel: 'Cash on Delivery', icon: <ShoppingBag className="w-4 h-4" />, enabled: paymentSettings.codEnabled !== false, displayName: paymentSettings.codDisplayName, logoUrl: paymentSettings.codLogoImageUrl },
+                    { id: 'bKash',       fallbackLabel: 'bKash (Manual)',   icon: <BkashLogo className="w-5 h-5" />,   enabled: paymentSettings.bKashEnabled === true, displayName: paymentSettings.bKashDisplayName, logoUrl: paymentSettings.bKashLogoImageUrl },
+                    { id: 'Nagad',       fallbackLabel: 'Nagad (Manual)',   icon: <NagadLogo className="w-5 h-5" />,   enabled: paymentSettings.nagadEnabled === true, displayName: paymentSettings.nagadDisplayName, logoUrl: paymentSettings.nagadLogoImageUrl },
+                    { id: 'Rocket',      fallbackLabel: 'Rocket (Manual)',  icon: <RocketLogo className="w-5 h-5" />,  enabled: paymentSettings.rocketEnabled === true, displayName: paymentSettings.rocketDisplayName, logoUrl: paymentSettings.rocketLogoImageUrl },
+                    { id: 'Bank',        fallbackLabel: 'Bank Transfer',    icon: <Landmark className="w-4 h-4" />,    enabled: paymentSettings.bankEnabled === true, displayName: paymentSettings.bankDisplayName, logoUrl: paymentSettings.bankLogoImageUrl },
+                    { id: 'Stripe',      fallbackLabel: 'Card (Stripe)',    icon: <StripeLogo className="w-5 h-5" />,  enabled: paymentSettings.stripeEnabled === true, displayName: paymentSettings.stripeDisplayName, logoUrl: paymentSettings.stripeLogoImageUrl },
+                    { id: 'PayPal',      fallbackLabel: 'PayPal',           icon: <PaypalLogo className="w-5 h-5" />,  enabled: paymentSettings.paypalEnabled === true, displayName: paymentSettings.paypalDisplayName, logoUrl: paymentSettings.paypalLogoImageUrl },
+                    { id: 'bKashAuto',   fallbackLabel: 'bKash (Auto)',     icon: <BkashLogo className="w-5 h-5" />,   enabled: paymentSettings.bKashAutoEnabled === true, displayName: paymentSettings.bKashAutoDisplayName, logoUrl: paymentSettings.bKashAutoLogoImageUrl },
+                    { id: 'NagadAuto',   fallbackLabel: 'Nagad (Auto)',     icon: <NagadLogo className="w-5 h-5" />,   enabled: paymentSettings.nagadAutoEnabled === true, displayName: paymentSettings.nagadAutoDisplayName, logoUrl: paymentSettings.nagadAutoLogoImageUrl },
+                    { id: 'SSLCommerz',  fallbackLabel: 'SSLCommerz',       icon: <CreditCard className="w-4 h-4" />,  enabled: paymentSettings.sslCommerzEnabled === true, displayName: paymentSettings.sslCommerzDisplayName, logoUrl: paymentSettings.sslCommerzLogoImageUrl },
+                    { id: 'Razorpay',    fallbackLabel: 'Razorpay',         icon: <CreditCard className="w-4 h-4" />,  enabled: paymentSettings.razorpayEnabled === true, displayName: paymentSettings.razorpayDisplayName, logoUrl: paymentSettings.razorpayLogoImageUrl },
+                  ] as PaymentOption[]).filter(opt => opt.enabled).map(opt => {
+                    const logoUrl = cleanSetting(opt.logoUrl);
+                    const visibleLabel = getPaymentButtonLabel(opt.displayName, opt.fallbackLabel, logoUrl);
+                    return (
                     <label key={opt.id}
-                      className={`flex items-center gap-2 p-2.5 border rounded-xl cursor-pointer transition-all text-xs font-bold uppercase ${
+                      className={`min-h-[60px] flex items-center ${visibleLabel ? 'justify-start' : 'justify-center'} gap-3 p-2.5 border rounded-xl cursor-pointer transition-all text-xs font-bold uppercase ${
                         paymentMethod === opt.id
                           ? 'bg-emerald-50 border-emerald-400 text-emerald-700 ring-2 ring-emerald-200'
                           : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300'
                       }`}>
                       <input type="radio" name="pm" value={opt.id} checked={paymentMethod === opt.id}
                         onChange={() => setPaymentMethod(opt.id)} className="sr-only" />
-                      <span className="flex-shrink-0">{opt.icon}</span>
-                      <span className="truncate">{opt.label}</span>
+                      {logoUrl ? (
+                        <img
+                          src={logoUrl}
+                          alt={visibleLabel || opt.fallbackLabel}
+                          className="max-h-10 max-w-[132px] w-auto object-contain flex-shrink-0"
+                          loading="lazy"
+                          onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+                        />
+                      ) : (
+                        <span className="flex-shrink-0">{opt.icon}</span>
+                      )}
+                      {visibleLabel && <span className="truncate">{visibleLabel}</span>}
                     </label>
-                  ))}
+                  );})}
                 </div>
               </div>
 
@@ -1194,10 +1318,10 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
 
               <button
                 type="submit"
-                className="w-full mt-2 py-3.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 text-white font-black uppercase rounded-xl shadow-lg flex items-center justify-center gap-2 cursor-pointer transition-all"
+                className="w-full mt-2 py-4 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 text-white text-base font-black uppercase rounded-xl shadow-[0_10px_24px_rgba(5,150,105,0.24)] flex items-center justify-center gap-3 cursor-pointer transition-all"
               >
-                <Sparkles className="w-4 h-4" />
-                Place Order · {formatPrice(grandTotal)}
+                <ShoppingBag className="w-5 h-5" />
+                <span>PLACE ORDER ({formatPrice(grandTotal)})</span>
               </button>
             </form>
           </div>
