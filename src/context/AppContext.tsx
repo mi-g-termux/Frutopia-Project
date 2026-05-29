@@ -112,6 +112,7 @@ import {
   collection,
   writeBatch,
   doc,
+  setDoc,
 } from 'firebase/firestore';
 import {
   signInWithEmailAndPassword,
@@ -265,19 +266,33 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
   const [coupons, setCoupons]           = useState<Coupon[]>([]);
   const [newsletterSubscribers, setNewsletterSubscribers] = useState<NewsletterSubscriber[]>([]);
   const [reviews, setReviews]           = useState<Review[]>([]);
-  const [smtpSettings, setSmtpSettings] = useState<SMTPSettings | null>(() => {
-    try { 
-      const cached = localStorage.getItem('qf_smtpSettings');
-      return cached ? JSON.parse(cached) : null; 
-    } catch { 
-      return null; 
+  const readCachedSetting = <T,>(key: string): T | null => {
+    try {
+      const cached = localStorage.getItem(key);
+      return cached ? JSON.parse(cached) : null;
+    } catch {
+      return null;
     }
-  });
-  const [paymentSettings, setPaymentSettings] = useState<PaymentSettings | null>(null);
-  const [adminSettings, setAdminSettings]     = useState<AdminCredentials | null>(null);
-  const [supportSettings, setSupportSettings] = useState<SupportSettings | null>(null);
-  const [smsSettings, setSMSSettings]         = useState<SMSSettings | null>(null);
-  const [emailVerificationSettings, setEmailVerificationSettings] = useState<EmailVerificationSettings | null>(null);
+  };
+
+  const [smtpSettings, setSmtpSettings] = useState<SMTPSettings | null>(() =>
+    readCachedSetting<SMTPSettings>('qf_smtpSettings'),
+  );
+  const [paymentSettings, setPaymentSettings] = useState<PaymentSettings | null>(() =>
+    readCachedSetting<PaymentSettings>('qf_paymentSettings'),
+  );
+  const [adminSettings, setAdminSettings] = useState<AdminCredentials | null>(() =>
+    readCachedSetting<AdminCredentials>('qf_adminSettings'),
+  );
+  const [supportSettings, setSupportSettings] = useState<SupportSettings | null>(() =>
+    readCachedSetting<SupportSettings>('qf_supportSettings'),
+  );
+  const [smsSettings, setSMSSettings] = useState<SMSSettings | null>(() =>
+    readCachedSetting<SMSSettings>('qf_smsSettings'),
+  );
+  const [emailVerificationSettings, setEmailVerificationSettings] = useState<EmailVerificationSettings | null>(() =>
+    readCachedSetting<EmailVerificationSettings>('qf_emailVerification'),
+  );
   const [deliveryZones, setDeliveryZones] = useState<DeliveryZone[]>(() => getDeliveryZones());
 
   const [cart, setCart] = useState<CartItem[]>(() => {
@@ -907,21 +922,32 @@ const DEFAULT_ADMIN_ORDER_ALERT = `<!DOCTYPE html>
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ✅ FIREBASE FIX: Ensure SMTP settings are properly loaded from Firestore
-  // This runs after Firebase initialization to reload settings from the cloud
+  // ✅ FIREBASE FIX: reload all admin settings after Firebase boots.
+  // Checkout Channels uses paymentSettings, so only refreshing SMTP caused
+  // payment methods to fall back to defaults until a listener eventually fired.
   useEffect(() => {
-    if (!isFirebaseReady) return; // Wait for Firebase to be ready
-    
+    if (!isFirebaseReady) return;
+
     const reloadCriticalSettings = async () => {
       try {
-        const freshSmtp = await dbService.getSMTPSettings();
+        const [freshSmtp, freshPayment, freshSupport, freshSms, freshEmailVerification] = await Promise.all([
+          dbService.getSMTPSettings(),
+          dbService.getPaymentSettings(),
+          dbService.getSupportSettings(),
+          dbService.getSMSSettings(),
+          dbService.getEmailVerificationSettings(),
+        ]);
         setSmtpSettings(freshSmtp);
-        console.log('[AppContext] SMTP settings reloaded from Firebase');
+        setPaymentSettings(freshPayment);
+        setSupportSettings(freshSupport);
+        setSMSSettings(freshSms);
+        setEmailVerificationSettings(freshEmailVerification);
+        console.log('[AppContext] Admin settings reloaded from Firebase');
       } catch (err) {
-        console.warn('[AppContext] Failed to reload SMTP settings from Firebase:', err);
+        console.warn('[AppContext] Failed to reload admin settings from Firebase:', err);
       }
     };
-    
+
     reloadCriticalSettings();
   }, [isFirebaseReady]);
 
@@ -1567,9 +1593,29 @@ const DEFAULT_ADMIN_ORDER_ALERT = `<!DOCTYPE html>
   };
 
   // ── Settings savers ────────────────────────────────────────────────────────
+  const removeUndefinedDeep = (value: any): any => {
+    if (Array.isArray(value)) return value.map(removeUndefinedDeep);
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(
+        Object.entries(value)
+          .filter(([, entry]) => entry !== undefined)
+          .map(([key, entry]) => [key, removeUndefinedDeep(entry)]),
+      );
+    }
+    return value;
+  };
+
+  const saveFirebaseSettingsDoc = async (key: string, value: unknown) => {
+    if (databaseEngineRef.current !== 'firebase' && getActiveEngine() !== 'firebase') return;
+    const database = getDb();
+    if (!database) throw new Error('Firebase database is not ready yet.');
+    await setDoc(doc(database, 'settings', key), removeUndefinedDeep(value), { merge: false });
+  };
+
   const saveSiteSettings = async (settings: SiteSettings) => {
-    await dbService.saveSiteSettings(settings);
     setSiteSettings(settings);
+    try { localStorage.setItem('qf_siteSettings', JSON.stringify(settings)); } catch {}
+    await dbService.saveSiteSettings(settings);
     try {
       const bc = new BroadcastChannel('qf_settings_sync');
       bc.postMessage({ type: 'siteSettings', payload: settings });
@@ -1577,12 +1623,49 @@ const DEFAULT_ADMIN_ORDER_ALERT = `<!DOCTYPE html>
     } catch {}
   };
 
-  const saveSMTPSettings              = async (s: SMTPSettings)              => { await dbService.saveSMTPSettings(s);              setSmtpSettings(s); };
-  const savePaymentSettings           = async (s: PaymentSettings)           => { await dbService.savePaymentSettings(s);           setPaymentSettings(s); };
-  const saveAdminSettings             = async (s: AdminCredentials)          => { await dbService.saveAdminSettings(s);             setAdminSettings(s); };
-  const saveSupportSettings           = async (s: SupportSettings)           => { await dbService.saveSupportSettings(s);           setSupportSettings(s); triggerTawkToLoader(); };
-  const saveSMSSettings               = async (s: SMSSettings)               => { await dbService.saveSMSSettings(s);               setSMSSettings(s); };
-  const saveEmailVerificationSettings = async (s: EmailVerificationSettings) => { await dbService.saveEmailVerificationSettings(s); setEmailVerificationSettings(s); };
+  const saveSMTPSettings = async (s: SMTPSettings) => {
+    setSmtpSettings(s);
+    try { localStorage.setItem('qf_smtpSettings', JSON.stringify(s)); } catch {}
+    await dbService.saveSMTPSettings(s);
+    await saveFirebaseSettingsDoc('smtpSettings', s);
+  };
+
+  const savePaymentSettings = async (s: PaymentSettings) => {
+    setPaymentSettings(s);
+    try { localStorage.setItem('qf_paymentSettings', JSON.stringify(s)); } catch {}
+    await dbService.savePaymentSettings(s);
+    await saveFirebaseSettingsDoc('paymentSettings', s);
+    console.log('[AppContext] Payment checkout settings saved to Firebase settings/paymentSettings.');
+  };
+
+  const saveAdminSettings = async (s: AdminCredentials) => {
+    setAdminSettings(s);
+    try { localStorage.setItem('qf_adminSettings', JSON.stringify(s)); } catch {}
+    await dbService.saveAdminSettings(s);
+    await saveFirebaseSettingsDoc('adminSettings', s);
+  };
+
+  const saveSupportSettings = async (s: SupportSettings) => {
+    setSupportSettings(s);
+    try { localStorage.setItem('qf_supportSettings', JSON.stringify(s)); } catch {}
+    await dbService.saveSupportSettings(s);
+    await saveFirebaseSettingsDoc('supportSettings', s);
+    triggerTawkToLoader();
+  };
+
+  const saveSMSSettings = async (s: SMSSettings) => {
+    setSMSSettings(s);
+    try { localStorage.setItem('qf_smsSettings', JSON.stringify(s)); } catch {}
+    await dbService.saveSMSSettings(s);
+    await saveFirebaseSettingsDoc('smsSettings', s);
+  };
+
+  const saveEmailVerificationSettings = async (s: EmailVerificationSettings) => {
+    setEmailVerificationSettings(s);
+    try { localStorage.setItem('qf_emailVerification', JSON.stringify(s)); } catch {}
+    await dbService.saveEmailVerificationSettings(s);
+    await saveFirebaseSettingsDoc('emailVerification', s);
+  };
 
   // ── Cart operations ────────────────────────────────────────────────────────
   const addToCart = (product: Product) => {
