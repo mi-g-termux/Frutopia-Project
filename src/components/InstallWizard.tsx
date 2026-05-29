@@ -86,10 +86,11 @@ const backBtn =
 
 interface InstallProgressState {
   step:      number
-  status:    'idle' | 'running' | 'awaiting-upload' | 'error' | 'done'
+  status:    'idle' | 'running' | 'awaiting-upload' | 'awaiting-envvars' | 'error' | 'done'
   message:   string
   error:     string
   completed: number[]
+  envBlock?: string
 }
 
 interface Step6Props {
@@ -287,8 +288,22 @@ function Step6Install({
           body:   JSON.stringify(creds),
         })
         const body = await r.json().catch(() => null)
-        if (r.ok) saved = true
-        else saveError = body?.message || `Node installer returned HTTP ${r.status}`
+        if (r.ok && body?.success) {
+          saved = true
+        } else if (body?.needsEnvVars && body?.envBlock) {
+          // Vercel (read-only FS) — also save to browser so admin can finish this session,
+          // then show env-var paste UI for permanent fix.
+          try { localStorage.setItem(DYNAMIC_FIREBASE_KEY, JSON.stringify(creds)) } catch {}
+          setInstallProgress(p => ({
+            ...p,
+            status: 'awaiting-envvars',
+            envBlock: body.envBlock,
+            message: body.message || 'Add these environment variables in Vercel and redeploy.',
+          }))
+          return
+        } else {
+          saveError = body?.message || `Node installer returned HTTP ${r.status}`
+        }
       } catch (e: any) { saveError = e?.message || 'Node installer is not reachable' }
     } else {
       saveError = 'No writable installer endpoint was detected on this host.'
@@ -324,7 +339,8 @@ function Step6Install({
 
   const isBlocking =
     installProgress.status === 'running' ||
-    installProgress.status === 'awaiting-upload'
+    installProgress.status === 'awaiting-upload' ||
+    installProgress.status === 'awaiting-envvars'
 
   function getRowStatus(rowIndex: number): 'pending' | 'running' | 'completed' | 'error' {
     const n = rowIndex + 1
@@ -393,6 +409,48 @@ function Step6Install({
           </button>
         </div>
       )}
+
+      {/* Awaiting Vercel env-vars paste */}
+      {installProgress.status === 'awaiting-envvars' && installProgress.envBlock && (
+        <div className="bg-sky-50 border-l-4 border-sky-500 text-sky-900 p-4 rounded space-y-3">
+          <p className="font-semibold text-sm">🔧 One-time Vercel setup — permanent fix</p>
+          <p className="text-xs leading-relaxed">
+            Vercel's filesystem is read-only, so the installer can't write{' '}
+            <code className="bg-white px-1 rounded">firebase-config.json</code> there. Paste these
+            environment variables in <strong>Vercel → Project → Settings → Environment Variables</strong>
+            {' '}(check Production + Preview + Development), then trigger a <strong>Redeploy</strong>.
+            After that, the installer will <strong>never</strong> appear again on any browser or device.
+          </p>
+          <div className="relative">
+            <pre className="bg-slate-900 text-emerald-300 text-[11px] font-mono p-3 rounded-lg overflow-x-auto select-all max-h-56">
+{installProgress.envBlock}
+            </pre>
+            <button
+              type="button"
+              onClick={() => { try { navigator.clipboard.writeText(installProgress.envBlock || '') } catch {} }}
+              className="absolute top-2 right-2 bg-emerald-500 hover:bg-emerald-600 text-white text-[10px] font-bold uppercase px-2 py-1 rounded"
+            >
+              Copy
+            </button>
+          </div>
+          <p className="text-[11px] text-sky-800">
+            A browser fallback was also saved so you can finish this install session right now.
+            Click Continue to proceed — but remember to set the env-vars + redeploy so other users don't see this wizard.
+          </p>
+          <button
+            className="bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-semibold px-5 py-2 rounded-lg transition-colors duration-150"
+            onClick={async () => {
+              markDone(2)
+              setInstallProgress(p => ({ ...p, status: 'running', message: 'Continuing with saved browser config…' }))
+              await runInstallFromStep3()
+            }}
+          >
+            ✅ I've added the env-vars (or skipping for now), Continue →
+          </button>
+        </div>
+      )}
+
+
 
       {/* Error banner */}
       {installProgress.status === 'error' && (() => {
@@ -654,13 +712,9 @@ export default function InstallWizard() {
 
   const [storeNameError, setStoreNameError] = useState('')
 
-  const [installProgress, setInstallProgress] = useState<{
-    step:      number
-    status:    'idle' | 'running' | 'awaiting-upload' | 'error' | 'done'
-    message:   string
-    error:     string
-    completed: number[]
-  }>({ step: 0, status: 'idle', message: '', error: '', completed: [] })
+  const [installProgress, setInstallProgress] = useState<InstallProgressState>({
+    step: 0, status: 'idle', message: '', error: '', completed: [],
+  })
 
   // ── Shared input style ─────────────────────────────────────────────────────
   const inputClass =

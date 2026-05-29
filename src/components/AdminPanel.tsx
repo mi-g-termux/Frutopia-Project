@@ -2143,11 +2143,28 @@ await saveSiteSettings(JSON.parse(JSON.stringify(current)));
            <input type="text" value={orderStatusSubject} onChange={e => setOrderStatusSubject(e.target.value)} placeholder="e.g. Your order #{{orderNumber}} is now {{status}} {{emoji}}" className="w-full bg-slate-50 border border-slate-200 focus:border-violet-400 focus:ring-1 focus:ring-violet-400 rounded-lg px-2.5 py-1.5 text-xs font-semibold outline-none transition-all" />
            <p className="text-[9px] text-slate-400 mt-0.5">Placeholders: <code className="bg-slate-100 px-1 rounded">{'{{orderNumber}}'}</code> <code className="bg-slate-100 px-1 rounded">{'{{status}}'}</code> <code className="bg-slate-100 px-1 rounded">{'{{emoji}}'}</code> <code className="bg-slate-100 px-1 rounded">{'{{customerName}}'}</code></p>
          </div>
-         <div>
-           <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">HTML Body</label>
-           <textarea value={orderStatusTemplate} onChange={e => setOrderStatusTemplate(e.target.value)} rows={8} placeholder="<!-- Leave blank for built-in default -->" className="w-full bg-slate-50 border border-slate-200 focus:border-violet-400 focus:ring-1 focus:ring-violet-400 rounded-lg px-2.5 py-1.5 text-xs font-mono outline-none transition-all resize-y" />
-         </div>
-       </div>
+          <div>
+            <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">HTML Body</label>
+            <textarea value={orderStatusTemplate} onChange={e => setOrderStatusTemplate(e.target.value)} rows={8} placeholder="<!-- Leave blank for built-in default -->" className="w-full bg-slate-50 border border-slate-200 focus:border-violet-400 focus:ring-1 focus:ring-violet-400 rounded-lg px-2.5 py-1.5 text-xs font-mono outline-none transition-all resize-y" />
+          </div>
+          {templatePreview.orderStatus && orderStatusTemplate && (
+            <div>
+              <p className="text-[9px] font-bold uppercase text-slate-400 mb-1">Live Preview</p>
+              <div className="border border-slate-200 rounded-lg overflow-hidden" style={{ maxHeight: 320, overflowY: 'auto' }}>
+                <iframe
+                  srcDoc={orderStatusTemplate
+                    .replace(/\{\{customerName\}\}/g, 'Mahfuj')
+                    .replace(/\{\{orderNumber\}\}/g, 'QF-91540')
+                    .replace(/\{\{status\}\}/g, 'Shipped')
+                    .replace(/\{\{emoji\}\}/g, '🚚')
+                    .replace(/\{\{storeName\}\}/g, siteSettings?.websiteName || 'E-Shop')}
+                  style={{ width: '100%', height: 300, border: 'none' }}
+                  title="status-preview"
+                />
+              </div>
+            </div>
+          )}
+        </div>
 
        <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-3">
          <div className="flex items-center justify-between">
@@ -2163,11 +2180,27 @@ await saveSiteSettings(JSON.parse(JSON.stringify(current)));
            <input type="text" value={welcomeSubject} onChange={e => setWelcomeSubject(e.target.value)} placeholder="e.g. Welcome to {{storeName}}, {{name}}! 🎉" className="w-full bg-slate-50 border border-slate-200 focus:border-amber-400 focus:ring-1 focus:ring-amber-400 rounded-lg px-2.5 py-1.5 text-xs font-semibold outline-none transition-all" />
            <p className="text-[9px] text-slate-400 mt-0.5">Placeholders: <code className="bg-slate-100 px-1 rounded">{'{{name}}'}</code> <code className="bg-slate-100 px-1 rounded">{'{{storeName}}'}</code> <code className="bg-slate-100 px-1 rounded">{'{{email}}'}</code></p>
          </div>
-         <div>
-           <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">HTML Body</label>
-           <textarea value={welcomeTemplate} onChange={e => setWelcomeTemplate(e.target.value)} rows={8} placeholder="<!-- Leave blank for built-in default -->" className="w-full bg-slate-50 border border-slate-200 focus:border-amber-400 focus:ring-1 focus:ring-amber-400 rounded-lg px-2.5 py-1.5 text-xs font-mono outline-none transition-all resize-y" />
-         </div>
-       </div>
+          <div>
+            <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">HTML Body</label>
+            <textarea value={welcomeTemplate} onChange={e => setWelcomeTemplate(e.target.value)} rows={8} placeholder="<!-- Leave blank for built-in default -->" className="w-full bg-slate-50 border border-slate-200 focus:border-amber-400 focus:ring-1 focus:ring-amber-400 rounded-lg px-2.5 py-1.5 text-xs font-mono outline-none transition-all resize-y" />
+          </div>
+          {templatePreview.welcome && welcomeTemplate && (
+            <div>
+              <p className="text-[9px] font-bold uppercase text-slate-400 mb-1">Live Preview</p>
+              <div className="border border-slate-200 rounded-lg overflow-hidden" style={{ maxHeight: 320, overflowY: 'auto' }}>
+                <iframe
+                  srcDoc={welcomeTemplate
+                    .replace(/\{\{name\}\}/g, 'Mahfuj')
+                    .replace(/\{\{customerName\}\}/g, 'Mahfuj')
+                    .replace(/\{\{storeName\}\}/g, siteSettings?.websiteName || 'E-Shop')
+                    .replace(/\{\{email\}\}/g, 'customer@example.com')}
+                  style={{ width: '100%', height: 300, border: 'none' }}
+                  title="welcome-preview"
+                />
+              </div>
+            </div>
+          )}
+        </div>
 
        <div className="pt-3 border-t border-slate-100">
          <button onClick={handleSaveSMTPCMS} className="w-full sm:w-auto cursor-pointer flex items-center justify-center gap-1.5 px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-sans font-semibold uppercase text-xs shadow-sm rounded-lg transition-colors">
@@ -2218,10 +2251,22 @@ await saveSiteSettings(JSON.parse(JSON.stringify(current)));
  {settingsSection ==='sms' && (
  <div className="space-y-6"> <div> <h4 className="text-xs font-bold uppercase text-slate-400"> SMS GATEWAY — TWILIO</h4> <p className="text-xs text-slate-400 font-semibold leading-relaxed mt-1">Configure Twilio to send OTP codes via SMS for password resets and order notifications.</p> </div> {/* Enable SMS */}
  <div className="flex items-center gap-2 bg-slate-50 p-2.5 rounded-xl border border-slate-200"> <input type="checkbox" id="sms-en" checked={smsEnabled} onChange={e => setSmsEnabled(e.target.checked)} className="scale-110 accent-emerald-600 rounded cursor-pointer" /> <label htmlFor="sms-en" className="text-xs font-bold uppercase cursor-pointer text-slate-700">Enable SMS Gateway (Twilio)</label> </div> {/* Twilio Credentials */}
- <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-3"> <p className="text-[10px] font-extrabold uppercase text-slate-500 tracking-wider"> Twilio Credentials</p> <div className="grid grid-cols-1 md:grid-cols-2 gap-3"> <div> <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">Account SID</label> <input type="text" value={smsAccountSid} onChange={e => setSmsAccountSid(e.target.value)} placeholder="ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+ <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-3"> <p className="text-[10px] font-extrabold uppercase text-slate-500 tracking-wider"> Twilio Credentials</p>
+ {/* Decoy fields to absorb browser/password-manager autofill so admin login creds don't leak into Twilio inputs */}
+ <div style={{ position: 'absolute', left: '-9999px', height: 0, width: 0, overflow: 'hidden' }} aria-hidden="true">
+   <input type="text" name="username" tabIndex={-1} autoComplete="username" defaultValue="" readOnly />
+   <input type="password" name="password" tabIndex={-1} autoComplete="current-password" defaultValue="" readOnly />
+ </div>
+ <form autoComplete="off" onSubmit={e => e.preventDefault()}>
+ <div className="grid grid-cols-1 md:grid-cols-2 gap-3"> <div> <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">Account SID</label> <input type="text" value={smsAccountSid} onChange={e => setSmsAccountSid(e.target.value)} placeholder="ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+ name="twilio_account_sid" autoComplete="off" data-lpignore="true" data-1p-ignore="true" data-form-type="other"
  className="w-full bg-slate-50 border border-slate-200 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 rounded-lg px-2.5 py-1.5 text-xs font-semibold outline-none transition-all" /> </div> <div> <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">Auth Token</label> <input type="password" value={smsAuthToken} onChange={e => setSmsAuthToken(e.target.value)} placeholder="••••••••••••••••••••••••••••••••"
+ name="twilio_auth_token" autoComplete="new-password" data-lpignore="true" data-1p-ignore="true" data-form-type="other"
  className="w-full bg-slate-50 border border-slate-200 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 rounded-lg px-2.5 py-1.5 text-xs font-semibold outline-none transition-all" /> </div> <div className="md:col-span-2"> <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">From Number <span className="normal-case font-normal text-slate-400">(e.g. +15550001234)</span></label> <input type="text" value={smsFromNumber} onChange={e => setSmsFromNumber(e.target.value)} placeholder="+15550001234"
- className="w-full bg-slate-50 border border-slate-200 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 rounded-lg px-2.5 py-1.5 text-xs font-semibold outline-none transition-all" /> </div> </div> </div> {/* SMS OTP Config */}
+ name="twilio_from_number" autoComplete="off" data-lpignore="true" data-1p-ignore="true" data-form-type="other"
+ className="w-full bg-slate-50 border border-slate-200 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 rounded-lg px-2.5 py-1.5 text-xs font-semibold outline-none transition-all" /> </div> </div>
+ </form>
+ </div> {/* SMS OTP Config */}
  <div className="bg-violet-50/40 border border-violet-200 rounded-xl p-4 space-y-3"> <div className="flex items-center justify-between"> <p className="text-[10px] font-extrabold uppercase text-violet-700 tracking-wider"> SMS OTP Configuration</p> <div className="flex items-center gap-2"> <input type="checkbox" id="sms-otp-en" checked={smsOtpEnabled} onChange={e => setSmsOtpEnabled(e.target.checked)} className="scale-110 accent-violet-600 rounded cursor-pointer" /> <label htmlFor="sms-otp-en" className="text-[10px] font-bold uppercase cursor-pointer text-violet-700">Enable SMS OTP</label> </div> </div> <div className="grid grid-cols-1 md:grid-cols-2 gap-3"> <div> <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">OTP Expiry (minutes)</label> <input type="number" min={1} max={60} value={smsOtpExpiry} onChange={e => setSmsOtpExpiry(Number(e.target.value))}
  className="w-full bg-white border border-slate-200 focus:border-violet-400 focus:ring-1 focus:ring-violet-400 rounded-lg px-2.5 py-1.5 text-xs font-semibold outline-none transition-all" /> </div> </div> <div> <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">Message Template</label> <textarea value={smsMsgTemplate} onChange={e => setSmsMsgTemplate(e.target.value)} rows={2}
  className="w-full bg-white border border-slate-200 focus:border-violet-400 focus:ring-1 focus:ring-violet-400 rounded-lg px-2.5 py-1.5 text-xs font-semibold outline-none transition-all resize-none"

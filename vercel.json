@@ -2,6 +2,7 @@
   "buildCommand": "vite build",
   "outputDirectory": "dist",
   "rewrites": [
+    { "source": "/firebase-config.json", "destination": "/api/firebase-config" },
     { "source": "/api/(.*)", "destination": "/api/$1" },
     { "source": "/((?!api/|.*\\..+$).*)", "destination": "/index.html" }
   ],
