@@ -621,9 +621,9 @@ const DEFAULT_ORDER_CONFIRMATION_TEMPLATE = `<!DOCTYPE html>
         <p><strong>Status:</strong> ✅ Confirmed</p>
       </div>
       <div class="price-box">
-        <div class="price-row"><span>Subtotal</span><span>${{subtotal}}</span></div>
-        <div class="price-row"><span>Delivery Fee</span><span>${{deliveryFee}}</span></div>
-        <div class="price-row total"><span>Total Amount</span><span>${{total}}</span></div>
+        <div class="price-row"><span>Subtotal</span><span>\${{subtotal}}</span></div>
+        <div class="price-row"><span>Delivery Fee</span><span>\${{deliveryFee}}</span></div>
+        <div class="price-row total"><span>Total Amount</span><span>\${{total}}</span></div>
       </div>
     </div>
     <div class="footer">
@@ -736,7 +736,7 @@ const DEFAULT_ADMIN_ORDER_ALERT = `<!DOCTYPE html>
       <p>A new order has been placed.</p>
       <p><strong>Order #:</strong> {{orderNumber}}</p>
       <p><strong>Customer:</strong> {{customerName}}</p>
-      <p><strong>Total:</strong> ${{total}}</p>
+      <p><strong>Total:</strong> \${{total}}</p>
     </div>
     <div class="footer">
       <p>Log in to your admin dashboard to process this order.</p>
@@ -1381,9 +1381,9 @@ const DEFAULT_ADMIN_ORDER_ALERT = `<!DOCTYPE html>
             <tbody>{{items}}</tbody>
           </table>
           <div style="margin-top:16px;text-align:right;font-size:14px;">
-            <p style="color:#64748b;margin:4px 0;">Subtotal: <strong>$\u007b{subtotal}}</strong></p>
-            <p style="color:#64748b;margin:4px 0;">Delivery: <strong>$\u007b{deliveryFee}}</strong></p>
-            <p style="color:#059669;font-size:18px;font-weight:900;margin:8px 0 0;">Total: <strong>$\u007b{total}}</strong></p>
+            <p style="color:#64748b;margin:4px 0;">Subtotal: <strong>\${{subtotal}}</strong></p>
+            <p style="color:#64748b;margin:4px 0;">Delivery: <strong>\${{deliveryFee}}</strong></p>
+            <p style="color:#059669;font-size:18px;font-weight:900;margin:8px 0 0;">Total: <strong>\${{total}}</strong></p>
           </div>
           <div style="margin-top:24px;padding:16px;background:#f1f5f9;border-radius:8px;font-size:13px;color:#475569;">
             <p style="margin:0 0 4px;"><strong>Deliver to:</strong> ${newOrder.address}, ${newOrder.city}</p>
