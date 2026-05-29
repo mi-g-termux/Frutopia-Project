@@ -9,6 +9,90 @@ import { useToast } from './Toast';
 import { X, User, LogIn, UserPlus, Eye, EyeOff, CheckCircle, AlertCircle, MapPin, Phone, Mail, Lock, ShoppingBag, ChevronRight, Package } from 'lucide-react';
 import { Order } from '../types';
 
+// Country dial codes for phone inputs (E.164). Ordered by region popularity.
+const COUNTRY_CODES: { code: string; flag: string; name: string }[] = [
+  { code: '+880', flag: '🇧🇩', name: 'Bangladesh' },
+  { code: '+91',  flag: '🇮🇳', name: 'India' },
+  { code: '+92',  flag: '🇵🇰', name: 'Pakistan' },
+  { code: '+1',   flag: '🇺🇸', name: 'United States / Canada' },
+  { code: '+44',  flag: '🇬🇧', name: 'United Kingdom' },
+  { code: '+971', flag: '🇦🇪', name: 'UAE' },
+  { code: '+966', flag: '🇸🇦', name: 'Saudi Arabia' },
+  { code: '+974', flag: '🇶🇦', name: 'Qatar' },
+  { code: '+965', flag: '🇰🇼', name: 'Kuwait' },
+  { code: '+973', flag: '🇧🇭', name: 'Bahrain' },
+  { code: '+968', flag: '🇴🇲', name: 'Oman' },
+  { code: '+60',  flag: '🇲🇾', name: 'Malaysia' },
+  { code: '+65',  flag: '🇸🇬', name: 'Singapore' },
+  { code: '+62',  flag: '🇮🇩', name: 'Indonesia' },
+  { code: '+66',  flag: '🇹🇭', name: 'Thailand' },
+  { code: '+84',  flag: '🇻🇳', name: 'Vietnam' },
+  { code: '+63',  flag: '🇵🇭', name: 'Philippines' },
+  { code: '+86',  flag: '🇨🇳', name: 'China' },
+  { code: '+81',  flag: '🇯🇵', name: 'Japan' },
+  { code: '+82',  flag: '🇰🇷', name: 'South Korea' },
+  { code: '+852', flag: '🇭🇰', name: 'Hong Kong' },
+  { code: '+886', flag: '🇹🇼', name: 'Taiwan' },
+  { code: '+61',  flag: '🇦🇺', name: 'Australia' },
+  { code: '+64',  flag: '🇳🇿', name: 'New Zealand' },
+  { code: '+49',  flag: '🇩🇪', name: 'Germany' },
+  { code: '+33',  flag: '🇫🇷', name: 'France' },
+  { code: '+39',  flag: '🇮🇹', name: 'Italy' },
+  { code: '+34',  flag: '🇪🇸', name: 'Spain' },
+  { code: '+31',  flag: '🇳🇱', name: 'Netherlands' },
+  { code: '+32',  flag: '🇧🇪', name: 'Belgium' },
+  { code: '+41',  flag: '🇨🇭', name: 'Switzerland' },
+  { code: '+43',  flag: '🇦🇹', name: 'Austria' },
+  { code: '+46',  flag: '🇸🇪', name: 'Sweden' },
+  { code: '+47',  flag: '🇳🇴', name: 'Norway' },
+  { code: '+45',  flag: '🇩🇰', name: 'Denmark' },
+  { code: '+358', flag: '🇫🇮', name: 'Finland' },
+  { code: '+351', flag: '🇵🇹', name: 'Portugal' },
+  { code: '+353', flag: '🇮🇪', name: 'Ireland' },
+  { code: '+30',  flag: '🇬🇷', name: 'Greece' },
+  { code: '+48',  flag: '🇵🇱', name: 'Poland' },
+  { code: '+420', flag: '🇨🇿', name: 'Czechia' },
+  { code: '+90',  flag: '🇹🇷', name: 'Turkey' },
+  { code: '+7',   flag: '🇷🇺', name: 'Russia' },
+  { code: '+380', flag: '🇺🇦', name: 'Ukraine' },
+  { code: '+972', flag: '🇮🇱', name: 'Israel' },
+  { code: '+20',  flag: '🇪🇬', name: 'Egypt' },
+  { code: '+27',  flag: '🇿🇦', name: 'South Africa' },
+  { code: '+234', flag: '🇳🇬', name: 'Nigeria' },
+  { code: '+254', flag: '🇰🇪', name: 'Kenya' },
+  { code: '+212', flag: '🇲🇦', name: 'Morocco' },
+  { code: '+55',  flag: '🇧🇷', name: 'Brazil' },
+  { code: '+52',  flag: '🇲🇽', name: 'Mexico' },
+  { code: '+54',  flag: '🇦🇷', name: 'Argentina' },
+  { code: '+56',  flag: '🇨🇱', name: 'Chile' },
+  { code: '+57',  flag: '🇨🇴', name: 'Colombia' },
+  { code: '+51',  flag: '🇵🇪', name: 'Peru' },
+];
+
+/**
+ * Try to split a stored phone like "+880 17XXXXXXXX" into { dial, local }.
+ * Falls back to default dial code when none matches.
+ */
+function splitDial(full: string, defaultDial = '+880'): { dial: string; local: string } {
+  const trimmed = (full || '').trim();
+  if (!trimmed) return { dial: defaultDial, local: '' };
+  // Sort by length desc so "+880" matches before "+88" etc.
+  const sorted = [...COUNTRY_CODES].sort((a, b) => b.code.length - a.code.length);
+  for (const c of sorted) {
+    if (trimmed.startsWith(c.code)) {
+      return { dial: c.code, local: trimmed.slice(c.code.length).replace(/^[\s-]+/, '') };
+    }
+  }
+  // Strip a leading "+" if present, return raw local
+  return { dial: defaultDial, local: trimmed.replace(/^\+/, '') };
+}
+
+/** Combine dial code + local digits into a single stored value. */
+function joinPhone(dial: string, local: string): string {
+  const digits = (local || '').replace(/[^\d]/g, '');
+  return digits ? `${dial} ${digits}` : '';
+}
+
 interface UserAuthModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -42,6 +126,7 @@ export const UserAuthModal = ({ isOpen, onClose, defaultTab = 'signin' }: UserAu
   // Sign up state
   const [suName, setSuName] = useState('');
   const [suEmail, setSuEmail] = useState('');
+  const [suDialCode, setSuDialCode] = useState('+880');
   const [suPhone, setSuPhone] = useState('');
   const [suAddress, setSuAddress] = useState('');
   const [suCity, setSuCity] = useState('');
@@ -50,7 +135,8 @@ export const UserAuthModal = ({ isOpen, onClose, defaultTab = 'signin' }: UserAu
 
   // Profile edit state
   const [editName, setEditName] = useState(userProfile?.name || '');
-  const [editPhone, setEditPhone] = useState(userProfile?.phone || '');
+  const [editDialCode, setEditDialCode] = useState(() => splitDial(userProfile?.phone || '').dial);
+  const [editPhone, setEditPhone] = useState(() => splitDial(userProfile?.phone || '').local);
   const [editAddress, setEditAddress] = useState(userProfile?.address || '');
   const [editCity, setEditCity] = useState(userProfile?.city || '');
 
@@ -58,7 +144,9 @@ export const UserAuthModal = ({ isOpen, onClose, defaultTab = 'signin' }: UserAu
     if (isUserLoggedIn) {
       setTab('profile');
       setEditName(userProfile?.name || '');
-      setEditPhone(userProfile?.phone || '');
+      const parsed = splitDial(userProfile?.phone || '');
+      setEditDialCode(parsed.dial);
+      setEditPhone(parsed.local);
       setEditAddress(userProfile?.address || '');
       setEditCity(userProfile?.city || '');
     } else {
@@ -183,10 +271,15 @@ export const UserAuthModal = ({ isOpen, onClose, defaultTab = 'signin' }: UserAu
     e.preventDefault();
     if (suPass !== suPassConf) { showPop('error', 'Passwords do not match.'); return; }
     if (suPass.length < 6) { showPop('error', 'Password must be at least 6 characters.'); return; }
+    const localDigits = suPhone.replace(/[^\d]/g, '');
+    if (localDigits.length < 6 || localDigits.length > 14) {
+      showPop('error', 'Please enter a valid mobile number (6–14 digits).');
+      return;
+    }
     setLoading(true);
     try {
       const result = await registerUser(
-        { name: suName, email: suEmail, phone: suPhone, address: suAddress, city: suCity },
+        { name: suName, email: suEmail, phone: joinPhone(suDialCode, suPhone), address: suAddress, city: suCity },
         suPass
       );
       if (result.success) {
@@ -205,14 +298,18 @@ export const UserAuthModal = ({ isOpen, onClose, defaultTab = 'signin' }: UserAu
   const handleProfileSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!userProfile) return;
-    
+    const localDigits = editPhone.replace(/[^\d]/g, '');
+    if (localDigits.length < 6 || localDigits.length > 14) {
+      showPop('error', 'Please enter a valid mobile number (6–14 digits).');
+      return;
+    }
     setLoading(true);
     try {
       // ✅ FIREBASE FIX: Must await updateUserProfile - it saves to Firestore!
       await updateUserProfile({ 
         ...userProfile, 
         name: editName, 
-        phone: editPhone, 
+        phone: joinPhone(editDialCode, editPhone), 
         address: editAddress, 
         city: editCity 
       });
@@ -485,10 +582,30 @@ export const UserAuthModal = ({ isOpen, onClose, defaultTab = 'signin' }: UserAu
                 </div>
                 <div>
                   <label htmlFor="auth-signup-phone" className="block text-[10px] font-bold uppercase text-slate-500 mb-1">Phone Number</label>
-                  <div className="relative">
-                    <Phone className="absolute left-3 top-2.5 w-4 h-4 text-slate-400" />
-                    <input id="auth-signup-phone" type="tel" required value={suPhone} onChange={e => setSuPhone(e.target.value)} placeholder="+880 17XX XXX XXX"
-                      className="w-full pl-9 pr-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-emerald-400 focus:bg-white transition-all" />
+                  <div className="flex gap-2">
+                    <select
+                      aria-label="Country code"
+                      value={suDialCode}
+                      onChange={e => setSuDialCode(e.target.value)}
+                      className="w-[110px] px-2 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-emerald-400 focus:bg-white transition-all cursor-pointer"
+                    >
+                      {COUNTRY_CODES.map(c => (
+                        <option key={c.code + c.name} value={c.code}>{c.flag} {c.code}</option>
+                      ))}
+                    </select>
+                    <div className="relative flex-1">
+                      <Phone className="absolute left-3 top-2.5 w-4 h-4 text-slate-400" />
+                      <input
+                        id="auth-signup-phone"
+                        type="tel"
+                        required
+                        inputMode="numeric"
+                        value={suPhone}
+                        onChange={e => setSuPhone(e.target.value.replace(/[^\d\s-]/g, ''))}
+                        placeholder="17XXXXXXXX"
+                        className="w-full pl-9 pr-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-emerald-400 focus:bg-white transition-all"
+                      />
+                    </div>
                   </div>
                 </div>
                 <div>
@@ -629,8 +746,28 @@ export const UserAuthModal = ({ isOpen, onClose, defaultTab = 'signin' }: UserAu
                   </div>
                   <div>
                     <label htmlFor="auth-profile-phone" className="block text-[10px] font-bold uppercase text-slate-500 mb-1">Phone</label>
-                    <input id="auth-profile-phone" type="tel" required value={editPhone} onChange={e => setEditPhone(e.target.value)}
-                      className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-emerald-400 focus:bg-white transition-all" />
+                    <div className="flex gap-2">
+                      <select
+                        aria-label="Country code"
+                        value={editDialCode}
+                        onChange={e => setEditDialCode(e.target.value)}
+                        className="w-[110px] px-2 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-emerald-400 focus:bg-white transition-all cursor-pointer"
+                      >
+                        {COUNTRY_CODES.map(c => (
+                          <option key={c.code + c.name} value={c.code}>{c.flag} {c.code}</option>
+                        ))}
+                      </select>
+                      <input
+                        id="auth-profile-phone"
+                        type="tel"
+                        required
+                        inputMode="numeric"
+                        value={editPhone}
+                        onChange={e => setEditPhone(e.target.value.replace(/[^\d\s-]/g, ''))}
+                        placeholder="17XXXXXXXX"
+                        className="flex-1 px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-emerald-400 focus:bg-white transition-all"
+                      />
+                    </div>
                   </div>
                   <div>
                     <label htmlFor="auth-profile-address" className="block text-[10px] font-bold uppercase text-slate-500 mb-1">Delivery Address</label>
