@@ -1,8 +1,12 @@
 /**
  * Vercel Serverless Function: /api/send-email
  *
- * This replaces the Express server's /api/send-email route.
- * Vercel auto-deploys files in /api/ as serverless functions.
+ * Replaces the Express server's /api/send-email route.
+ * Vercel auto-deploys files under /api/ as serverless functions.
+ *
+ * NEW: supports an optional `attachments` array, each item shaped as
+ *   { filename: string, content: string (base64), contentType?: string }
+ * This is how the order-confirmation flow attaches the PDF invoice.
  *
  * Gmail SMTP setup:
  *   host: smtp.gmail.com
@@ -15,13 +19,18 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import nodemailer from 'nodemailer';
 
+interface InboundAttachment {
+  filename?: string;
+  content?: string; // base64 (without data: URI prefix)
+  contentType?: string;
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // Only allow POST
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { to, subject, html, smtpSettings } = req.body || {};
+  const { to, subject, html, smtpSettings, attachments } = req.body || {};
 
   if (!to || !subject || !html) {
     return res.status(400).json({ error: 'Missing required fields: to, subject, html' });
@@ -43,26 +52,40 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const port = Number(smtp.port || 587);
 
     const transporter = nodemailer.createTransport({
-      host: smtp.host,               // e.g. smtp.gmail.com
-      port,                          // 587 for TLS, 465 for SSL
-      secure: port === 465,          // true only for port 465
+      host: smtp.host,
+      port,
+      secure: port === 465,
       auth: {
-        user: smtp.email,            // your Gmail address
-        pass: smtp.password,         // Gmail App Password (16-char code)
+        user: smtp.email,
+        pass: smtp.password,
       },
-      tls: {
-        rejectUnauthorized: false,   // allow self-signed certs on some hosts
-      },
+      tls: { rejectUnauthorized: false },
     });
+
+    // Normalize attachments: accept only well-formed entries with base64
+    // content. Silently drop malformed entries instead of failing the send.
+    const normalizedAttachments = Array.isArray(attachments)
+      ? attachments
+          .filter((a: InboundAttachment) => a && typeof a.content === 'string' && a.content.length > 0)
+          .map((a: InboundAttachment) => ({
+            filename: a.filename || 'attachment',
+            content: a.content as string,
+            encoding: 'base64' as const,
+            contentType: a.contentType || 'application/octet-stream',
+          }))
+      : [];
 
     const info = await transporter.sendMail({
       from: `"${smtp.fromName || 'Store'}" <${smtp.email}>`,
       to,
       subject,
       html,
+      attachments: normalizedAttachments.length ? normalizedAttachments : undefined,
     });
 
-    console.log(`[EMAIL SENT] To: ${to} | MessageID: ${info.messageId}`);
+    console.log(
+      `[EMAIL SENT] To: ${to} | MessageID: ${info.messageId} | Attachments: ${normalizedAttachments.length}`,
+    );
     return res.status(200).json({ success: true, messageId: info.messageId });
 
   } catch (err: any) {

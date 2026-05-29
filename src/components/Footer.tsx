@@ -8,13 +8,39 @@ import { useApp } from '../context/AppContext';
 import { Mail, Phone, MapPin, Facebook, Instagram, Twitter } from 'lucide-react';
 import { QuirkyFruityLogo } from './PaymentLogos';
 
+// Detect legacy/placeholder brand strings so we never leak the original demo
+// name once the admin has renamed the store.
+const LEGACY_BRAND_RE = /quirky[\s-]?fruity/i;
+
 export const Footer: React.FC = () => {
   const { siteSettings } = useApp();
+
+  const storeName = (siteSettings.websiteName || 'Store').trim();
+  const year = new Date().getFullYear();
+
+  // If admin-saved trademark text still contains the legacy demo brand,
+  // override it with a dynamic copyright line based on the live store name.
+  const rawTrademark = siteSettings.trademarkText || '';
+  const trademark =
+    !rawTrademark.trim() || LEGACY_BRAND_RE.test(rawTrademark)
+      ? `© ${year} ${storeName}. All rights reserved.`
+      : rawTrademark;
+
+  const rawFooterText = siteSettings.footerText || '';
+  const footerText =
+    !rawFooterText.trim() || LEGACY_BRAND_RE.test(rawFooterText)
+      ? `${storeName} — serving fresh, handcrafted goodness to nourish your day.`
+      : rawFooterText;
+
+  const contactEmail =
+    siteSettings.contactEmail && !LEGACY_BRAND_RE.test(siteSettings.contactEmail)
+      ? siteSettings.contactEmail
+      : `hello@${storeName.toLowerCase().replace(/[^a-z0-9]/g, '')}.com`;
 
   return (
     <footer className="bg-slate-900 font-sans text-white border-t border-slate-800 px-6 py-12 lg:py-16 shadow-inner">
       <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-12 gap-10">
-        
+
         {/* Column 1: Brand details */}
         <div className="md:col-span-4 flex flex-col gap-4">
           <div className="flex items-center gap-2.5">
@@ -22,7 +48,7 @@ export const Footer: React.FC = () => {
               {siteSettings.logoUrl && siteSettings.logoUrl.trim() !== '' ? (
                 <img
                   src={siteSettings.logoUrl}
-                  alt={siteSettings.websiteName || 'Logo'}
+                  alt={storeName}
                   className="w-full h-full object-contain"
                   onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
                 />
@@ -31,13 +57,13 @@ export const Footer: React.FC = () => {
               )}
             </div>
             <span className="text-xl font-bold tracking-tight text-emerald-500 capitalize">
-              {siteSettings.websiteName || 'quirky-fruity'}
+              {storeName}
             </span>
           </div>
           <p className="text-xs text-slate-400 font-normal leading-relaxed max-w-sm">
-            {siteSettings.footerText || 'quirky-fruity: serving dynamic organic fuel to nourish your daily vibrant self.'}
+            {footerText}
           </p>
-          
+
           {/* Social logos */}
           <div className="flex items-center gap-2.5 mt-2">
             <a
@@ -81,7 +107,6 @@ export const Footer: React.FC = () => {
                 </a>
               </li>
             ))}
-
           </ul>
         </div>
 
@@ -91,16 +116,16 @@ export const Footer: React.FC = () => {
           <ul className="space-y-3 text-xs text-slate-400 font-medium">
             <li className="flex items-start gap-2.5">
               <MapPin className="w-4 h-4 text-emerald-500 flex-shrink-0" />
-              <span>{siteSettings.contactAddress || '42 Orchard Lane, Gulshan, Dhaka, Bangladesh'}</span>
+              <span>{siteSettings.contactAddress || '—'}</span>
             </li>
             <li className="flex items-center gap-2.5">
               <Phone className="w-4 h-4 text-emerald-500 flex-shrink-0" />
-              <span>{siteSettings.contactPhone || '+880 1711-223344'}</span>
+              <span>{siteSettings.contactPhone || '—'}</span>
             </li>
             <li className="flex items-center gap-2.5">
               <Mail className="w-4 h-4 text-emerald-500 flex-shrink-0" />
-              <a href={`mailto:${siteSettings.contactEmail}`} className="hover:text-emerald-400 transition-colors">
-                {siteSettings.contactEmail || 'hello@quirkyfruity.com'}
+              <a href={`mailto:${contactEmail}`} className="hover:text-emerald-400 transition-colors">
+                {contactEmail}
               </a>
             </li>
           </ul>
@@ -109,7 +134,7 @@ export const Footer: React.FC = () => {
       </div>
 
       <div className="max-w-7xl mx-auto mt-12 pt-6 border-t border-slate-800 text-center text-xs text-slate-500 font-medium">
-        <p>{siteSettings.trademarkText || '© 2026 quirky-fruity Ltd. All rights reserved.'}</p>
+        <p>{trademark}</p>
       </div>
     </footer>
   );

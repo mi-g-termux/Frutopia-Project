@@ -914,7 +914,7 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
   </div>
 
   <div class="foot">
-    <p>Thank you for your order! &nbsp;·&nbsp; ${siteSettings.trademarkText || '&copy; ' + new Date().getFullYear() + ' ' + storeName}</p>
+    <p>Thank you for your order! &nbsp;·&nbsp; ${(() => { const t = siteSettings.trademarkText || ''; return !t.trim() || /quirky[\s-]?fruity/i.test(t) ? `&copy; ${new Date().getFullYear()} ${storeName}. All rights reserved.` : t; })()}</p>
   </div>
 </div>
 <script>window.onload=function(){window.print();window.onafterprint=function(){window.close();};};</script>
@@ -971,7 +971,7 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
               <div className="flex items-center justify-between border-b border-slate-200 pb-3 mb-4">
                 <div>
                   <h3 className="text-xl font-bold text-emerald-600 uppercase tracking-tight">
-                    {siteSettings.websiteName || 'QUIRKY-FRUITY'}
+                    {(siteSettings.websiteName || 'Store').toUpperCase()}
                   </h3>
                   <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">SALES RECEIPT</p>
                 </div>
@@ -1033,7 +1033,15 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
               <div className="text-center text-xs text-slate-400 mt-6 border-t border-dashed border-slate-200 pt-3">
                 <p className="font-semibold text-xs text-emerald-600">Thank you for your order!</p>
                 <p className="mt-1 text-[10px] leading-relaxed">Your confirmation receipt invoice email has been compiled and forwarded to <strong>{placedInvoiceOrder.email}</strong>.</p>
-                <p className="mt-3 text-[9px] text-slate-400 capitalize">{siteSettings.trademarkText}</p>
+                <p className="mt-3 text-[9px] text-slate-400 capitalize">
+                  {(() => {
+                    const name = (siteSettings.websiteName || 'Store').trim();
+                    const t = siteSettings.trademarkText || '';
+                    return !t.trim() || /quirky[\s-]?fruity/i.test(t)
+                      ? `© ${new Date().getFullYear()} ${name}. All rights reserved.`
+                      : t;
+                  })()}
+                </p>
               </div>
 
             </div>

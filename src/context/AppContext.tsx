@@ -125,6 +125,7 @@ import {
   onSupabaseReadyChange,
   onSupabaseSettingsChange,
 } from '../supabase';
+import { buildInvoicePdfBase64 } from '../lib/invoicePdf';
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  CONTEXT TYPE DEFINITION
@@ -1387,7 +1388,18 @@ const DEFAULT_ADMIN_ORDER_ALERT = `<!DOCTYPE html>
 
     // ── Send order confirmation email to customer ────────────────────────
     try {
-      const storeName = siteSettings?.websiteName || 'Fruitopia';
+      const storeName = (siteSettings?.websiteName || 'Store').trim();
+
+      // Generate the invoice as a PDF on the client so the customer receives
+      // it as a proper attachment, not just an inline HTML email.
+      let invoicePdfBase64: string | null = null;
+      try {
+        invoicePdfBase64 = buildInvoicePdfBase64({ order: newOrder, siteSettings });
+      } catch (pdfErr) {
+        // PDF generation must never block the email; log and continue.
+        console.warn('[INVOICE PDF] generation failed, sending email without attachment:', pdfErr);
+      }
+
       const itemsHtml = newOrder.items.map(i =>
         `<tr><td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;color:#1e293b;">${i.name}</td><td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;color:#475569;text-align:center;">${i.quantity}</td><td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;color:#475569;text-align:right;">$${i.price.toFixed(2)}</td></tr>`
       ).join('');
@@ -1427,7 +1439,7 @@ const DEFAULT_ADMIN_ORDER_ALERT = `<!DOCTYPE html>
 
       const orderSubject = smtpSettings?.orderConfirmationSubject || `[${storeName}] Order #${newOrder.orderNumber} Confirmed!`;
 
-      // Send to customer
+      // Send to customer — with PDF invoice attached when available.
       fetch('/api/send-email', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1436,6 +1448,15 @@ const DEFAULT_ADMIN_ORDER_ALERT = `<!DOCTYPE html>
           subject: orderSubject,
           html: confirmationHtml,
           smtpSettings: smtpSettings ? { ...smtpSettings, fromName: smtpSettings.fromName || storeName } : null,
+          attachments: invoicePdfBase64
+            ? [
+                {
+                  filename: `invoice-${newOrder.orderNumber}.pdf`,
+                  content: invoicePdfBase64,
+                  contentType: 'application/pdf',
+                },
+              ]
+            : undefined,
         }),
       }).catch(() => {});
 
@@ -1559,7 +1580,7 @@ const DEFAULT_ADMIN_ORDER_ALERT = `<!DOCTYPE html>
         fetch('/api/send-email', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            to: email, subject: `Welcome to ${siteSettings?.websiteName || 'Quirky Fruity'} Newsletter!`,
+            to: email, subject: `Welcome to ${siteSettings?.websiteName || 'our store'} Newsletter!`,
             html: `<div style="font-family:sans-serif;background:#fcf3e3;padding:40px;text-align:center;border-radius:12px;max-width:600px;margin:auto;"><div style="font-size:50px;">🎉</div><h1 style="color:#ff5c35;">Awesome, you are subscribed!</h1><p>Get ready for exciting product launches, healthy organic recipes, and exclusive promo codes directly in your inbox.</p><p style="font-size:13px;color:#9ca3af;">${siteSettings?.trademarkText || ''}</p></div>`,
             smtpSettings: smtpSettings ? { ...smtpSettings, fromName: smtpSettings.fromName || siteSettings?.websiteName || 'Store' } : null,
           }),
