@@ -3,12 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { useToast } from './Toast';
-import { X, Minus, Plus, Trash2, Tag, Ticket, CreditCard, ShoppingBag, Landmark, Sparkles, Printer } from 'lucide-react';
+import { X, Minus, Plus, Trash2, Tag, Ticket, CreditCard, ShoppingBag, Landmark, Sparkles, Printer, Phone, Shield, CheckCircle2 } from 'lucide-react';
 import { Order, CartItem } from '../types';
 import { BkashLogo, NagadLogo, StripeLogo, PaypalLogo, VisaMastercardLogo, RocketLogo, QuirkyFruityLogo } from './PaymentLogos';
+import { COUNTRY_PHONE_RULES, findRule, validatePhone, toE164 } from '../lib/phoneValidation';
 
 interface CartModalProps {
   isOpen: boolean;
@@ -56,6 +57,9 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
     isUserLoggedIn,
     deliveryZones,
     getZoneForCity,
+    smsSettings,
+    sendSmsOtp,
+    verifySmsOtp,
   } = useApp();
 
   const toast = useToast();
@@ -159,22 +163,65 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
   // Checkout Shipping form — auto-filled from userProfile
   const [customerName, setCustomerName] = useState('');
   const [email, setEmail] = useState('');
-  const [phone, setPhone] = useState('');
+  const [dialCode, setDialCode] = useState<string>('+880');
+  const [phoneLocal, setPhoneLocal] = useState('');
   const [address, setAddress] = useState('');
   const [city, setCity] = useState('');
   const [postalCode, setPostalCode] = useState('');
   const [deliveryNote, setDeliveryNote] = useState('');
+
+  // Phone OTP verification state — used when admin enabled requireOtpAtCheckout
+  const [otpSent, setOtpSent] = useState(false);
+  const [otpCode, setOtpCode] = useState('');
+  const [otpVerified, setOtpVerified] = useState(false);
+  const [otpSending, setOtpSending] = useState(false);
+  const [otpVerifyingPhone, setOtpVerifyingPhone] = useState(''); // E.164 we last sent code to
+
+  // Helper: split a stored "+880 1712345678" into dial + local parts
+  const splitStoredPhone = (full: string): { dial: string; local: string } => {
+    const trimmed = (full || '').trim();
+    if (!trimmed) return { dial: '+880', local: '' };
+    const sorted = [...COUNTRY_PHONE_RULES].sort((a, b) => b.dial.length - a.dial.length);
+    for (const c of sorted) {
+      if (trimmed.startsWith(c.dial)) {
+        return { dial: c.dial, local: trimmed.slice(c.dial.length).replace(/[^\d]/g, '') };
+      }
+    }
+    return { dial: '+880', local: trimmed.replace(/[^\d]/g, '') };
+  };
 
   // Auto-fill from user profile when modal opens
   useEffect(() => {
     if (userProfile) {
       setCustomerName(userProfile.name || '');
       setEmail(userProfile.email || '');
-      setPhone(userProfile.phone || '');
+      const p = splitStoredPhone(userProfile.phone || '');
+      setDialCode(p.dial);
+      setPhoneLocal(p.local);
       setAddress(userProfile.address || '');
       setCity(userProfile.city || '');
     }
   }, [userProfile, isUserLoggedIn]);
+
+  // Reset OTP whenever the phone changes
+  useEffect(() => {
+    setOtpSent(false);
+    setOtpVerified(false);
+    setOtpCode('');
+    setOtpVerifyingPhone('');
+  }, [dialCode, phoneLocal]);
+
+  // Convenience: live validation feedback for the phone field
+  const phoneValidation = useMemo(
+    () => validatePhone(dialCode, phoneLocal),
+    [dialCode, phoneLocal],
+  );
+  const phoneRule = findRule(dialCode);
+
+  const otpRequired =
+    !!(smsSettings?.isEnabled && smsSettings?.otpEnabled && smsSettings?.requireOtpAtCheckout);
+  const otpChannelLabel =
+    smsSettings?.channel === 'whatsapp' ? 'WhatsApp' : 'SMS';
   
   // Interactive Automatic Gateway Simulation states
   const [isAutoPortalOpen, setIsAutoPortalOpen] = useState(false);
@@ -232,9 +279,17 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
     }
   };
 
+  // Final E.164 string we'll persist with the order. Uses the validator
+  // so users entering "01712345678" for BD still get stored as "+8801712345678".
+  const phone = phoneValidation.ok ? phoneValidation.e164 : `${dialCode}${phoneLocal.replace(/\D/g, '')}`;
+
   const validateCheckoutForm = (): boolean => {
-    if (!customerName.trim() || !email.trim() || !phone.trim() || !address.trim() || !city.trim()) {
+    if (!customerName.trim() || !email.trim() || !address.trim() || !city.trim()) {
       toast.error('All shipping fields marked with an asterisk (*) are required.');
+      return false;
+    }
+    if (!phoneValidation.ok) {
+      toast.error(phoneValidation.error || 'Please enter a valid mobile number for the selected country.');
       return false;
     }
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -250,7 +305,54 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
       }
     }
 
+    if (otpRequired && (!otpVerified || otpVerifyingPhone !== phone)) {
+      toast.error(`Please verify your phone number via ${otpChannelLabel} OTP before placing the order.`);
+      return false;
+    }
+
     return true;
+  };
+
+  /** Send an OTP code to the current phone, via SMS or WhatsApp (admin choice). */
+  const handleSendOtp = async () => {
+    if (!phoneValidation.ok) {
+      toast.error(phoneValidation.error || 'Enter a valid phone number first.');
+      return;
+    }
+    if (!smsSettings?.isEnabled || !smsSettings?.otpEnabled) {
+      toast.error('OTP service is not configured. Contact the store admin.');
+      return;
+    }
+    setOtpSending(true);
+    try {
+      const res = await sendSmsOtp(phone, email);
+      if (res.success) {
+        setOtpSent(true);
+        setOtpVerified(false);
+        setOtpVerifyingPhone(phone);
+        toast.success(`Code sent via ${otpChannelLabel} to ${phone}.`);
+      } else {
+        toast.error(res.message);
+      }
+    } catch {
+      toast.error('Could not send OTP. Please try again.');
+    } finally {
+      setOtpSending(false);
+    }
+  };
+
+  const handleVerifyOtp = () => {
+    if (!otpCode.trim()) {
+      toast.error('Enter the code you received.');
+      return;
+    }
+    const res = verifySmsOtp(phone, otpCode.trim());
+    if (res.success) {
+      setOtpVerified(true);
+      toast.success('Phone number verified!');
+    } else {
+      toast.error(res.message);
+    }
   };
 
   const handleCheckoutSubmit = async (e: React.FormEvent) => {
@@ -367,7 +469,8 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
       // Reset form states
       setCustomerName('');
       setEmail('');
-      setPhone('');
+      setPhoneLocal('');
+      setOtpSent(false); setOtpVerified(false); setOtpCode(''); setOtpVerifyingPhone('');
       setAddress('');
       setCity('');
       setPostalCode('');
@@ -395,7 +498,8 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
     toast.success(`🎉 Payment confirmed! Order: ${placedOrder.orderNumber}`);
     setPlacedInvoiceOrder(placedOrder);
     clearCart();
-    setCustomerName(''); setEmail(''); setPhone(''); setAddress('');
+    setCustomerName(''); setEmail(''); setPhoneLocal(''); setAddress('');
+    setOtpSent(false); setOtpVerified(false); setOtpCode(''); setOtpVerifyingPhone('');
     setCity(''); setPostalCode(''); setDeliveryNote('');
     setManualTxId(''); setCardNumber(''); setCardExpiry(''); setCardCVC('');
     setAutoStep(4);
@@ -882,7 +986,220 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
               ))}
             </div>
 
-            {/* Billing breakdown calculations and Form UI should continue below layout requirements... */}
+            {/* ─── Coupon ─── */}
+            <form onSubmit={handleApplyCoupon} className="flex gap-2 mb-4">
+              <div className="relative flex-1">
+                <Ticket className="absolute left-3 top-2.5 w-4 h-4 text-slate-400" />
+                <input
+                  type="text"
+                  value={couponCode}
+                  onChange={(e) => setCouponCode(e.target.value.toUpperCase())}
+                  placeholder="Coupon code"
+                  className="w-full pl-9 pr-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm uppercase outline-none focus:ring-2 focus:ring-emerald-400 focus:bg-white transition-all"
+                />
+              </div>
+              <button type="submit" className="px-4 py-2.5 bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold uppercase rounded-xl cursor-pointer">
+                Apply
+              </button>
+              {appliedCoupon && (
+                <button type="button" onClick={removeCoupon} className="px-3 py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-600 text-xs font-bold uppercase rounded-xl cursor-pointer">
+                  Remove
+                </button>
+              )}
+            </form>
+
+            {/* ─── Pricing breakdown ─── */}
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 mb-4 space-y-1.5 text-sm">
+              <div className="flex justify-between text-slate-600">
+                <span>Subtotal</span><span className="font-semibold text-slate-800">{formatPrice(subtotal)}</span>
+              </div>
+              {discountAmount > 0 && (
+                <div className="flex justify-between text-rose-600">
+                  <span>Discount{appliedCoupon ? ` (${appliedCoupon.code})` : ''}</span>
+                  <span className="font-semibold">-{formatPrice(discountAmount)}</span>
+                </div>
+              )}
+              <div className="flex justify-between text-slate-600">
+                <span>Delivery {matchedZone?.isEnabled ? `(${matchedZone.name})` : ''}</span>
+                <span className="font-semibold text-slate-800">{formatPrice(deliveryFee)}</span>
+              </div>
+              {taxAmount > 0 && (
+                <div className="flex justify-between text-slate-600">
+                  <span>Tax</span><span className="font-semibold text-slate-800">{formatPrice(taxAmount)}</span>
+                </div>
+              )}
+              <div className="flex justify-between border-t border-dashed border-slate-300 pt-2 mt-1 text-emerald-600 font-bold text-base">
+                <span>Grand Total</span><span>{formatPrice(grandTotal)}</span>
+              </div>
+            </div>
+
+            {/* ─── Shipping & payment form ─── */}
+            <form onSubmit={handleCheckoutSubmit} className="space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="col-span-2">
+                  <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">Full Name *</label>
+                  <input required value={customerName} onChange={(e) => setCustomerName(e.target.value)}
+                    className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-emerald-400 focus:bg-white" />
+                </div>
+                <div className="col-span-2">
+                  <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">Email *</label>
+                  <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)}
+                    className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-emerald-400 focus:bg-white" />
+                </div>
+
+                {/* Country code + phone number */}
+                <div className="col-span-2">
+                  <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">
+                    Mobile Number * <span className="text-slate-400 normal-case font-medium">(used for order updates{otpRequired ? ` & ${otpChannelLabel} OTP` : ''})</span>
+                  </label>
+                  <div className="flex gap-2">
+                    <select
+                      value={dialCode}
+                      onChange={(e) => setDialCode(e.target.value)}
+                      className="px-2 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-emerald-400 focus:bg-white cursor-pointer max-w-[140px]"
+                    >
+                      {COUNTRY_PHONE_RULES.map(c => (
+                        <option key={c.dial} value={c.dial}>{c.dial} {c.name}</option>
+                      ))}
+                    </select>
+                    <input
+                      required
+                      inputMode="tel"
+                      value={phoneLocal}
+                      onChange={(e) => setPhoneLocal(e.target.value.replace(/[^\d\s-]/g, ''))}
+                      placeholder={phoneRule.lengths[0] ? `e.g. ${'X'.repeat(phoneRule.lengths[0])}` : 'Phone number'}
+                      className={`flex-1 px-3 py-2.5 bg-slate-50 border rounded-xl text-sm outline-none focus:ring-2 focus:bg-white ${
+                        phoneLocal && !phoneValidation.ok
+                          ? 'border-rose-300 focus:ring-rose-400'
+                          : 'border-slate-200 focus:ring-emerald-400'
+                      }`}
+                    />
+                  </div>
+                  {phoneLocal && !phoneValidation.ok && (
+                    <p className="text-[11px] text-rose-600 mt-1 font-semibold">{phoneValidation.error}</p>
+                  )}
+                  {phoneLocal && phoneValidation.ok && (
+                    <p className="text-[11px] text-emerald-600 mt-1 font-semibold flex items-center gap-1">
+                      <CheckCircle2 className="w-3 h-3" /> {phoneValidation.e164}
+                    </p>
+                  )}
+                </div>
+
+                {/* OTP verification block — only if admin requires it */}
+                {otpRequired && (
+                  <div className="col-span-2 bg-amber-50 border border-amber-200 rounded-xl p-3">
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                      <span className="text-[11px] font-bold uppercase text-amber-800 flex items-center gap-1">
+                        <Shield className="w-3.5 h-3.5" />
+                        {otpChannelLabel} OTP Verification
+                      </span>
+                      {otpVerified && otpVerifyingPhone === phone ? (
+                        <span className="text-[10px] font-bold uppercase text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full flex items-center gap-1">
+                          <CheckCircle2 className="w-3 h-3" /> Verified
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          disabled={!phoneValidation.ok || otpSending}
+                          onClick={handleSendOtp}
+                          className="text-[10px] font-bold uppercase bg-amber-600 hover:bg-amber-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white px-2.5 py-1 rounded-full cursor-pointer"
+                        >
+                          {otpSending ? 'Sending…' : otpSent ? 'Resend code' : `Send ${otpChannelLabel} code`}
+                        </button>
+                      )}
+                    </div>
+                    {otpSent && !(otpVerified && otpVerifyingPhone === phone) && (
+                      <div className="flex gap-2">
+                        <input
+                          inputMode="numeric"
+                          maxLength={8}
+                          value={otpCode}
+                          onChange={(e) => setOtpCode(e.target.value.replace(/[^\d]/g, ''))}
+                          placeholder="6-digit code"
+                          className="flex-1 px-3 py-2 bg-white border border-amber-300 rounded-lg text-sm font-mono tracking-widest text-center outline-none focus:ring-2 focus:ring-amber-400"
+                        />
+                        <button type="button" onClick={handleVerifyOtp}
+                          className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold uppercase rounded-lg cursor-pointer">
+                          Verify
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div className="col-span-2">
+                  <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">Address *</label>
+                  <input required value={address} onChange={(e) => setAddress(e.target.value)}
+                    className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-emerald-400 focus:bg-white" />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">City *</label>
+                  <input required value={city} onChange={(e) => setCity(e.target.value)}
+                    className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-emerald-400 focus:bg-white" />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">Postal Code</label>
+                  <input value={postalCode} onChange={(e) => setPostalCode(e.target.value)}
+                    className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-emerald-400 focus:bg-white" />
+                </div>
+                <div className="col-span-2">
+                  <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">Delivery Note</label>
+                  <textarea rows={2} value={deliveryNote} onChange={(e) => setDeliveryNote(e.target.value)}
+                    placeholder="Landmarks, gate code, preferred time…"
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-emerald-400 focus:bg-white" />
+                </div>
+              </div>
+
+              {/* ─── Payment method ─── */}
+              <div>
+                <label className="block text-[10px] font-bold uppercase text-slate-500 mb-2">Payment Method *</label>
+                <div className="grid grid-cols-2 gap-2">
+                  {[
+                    { id: 'COD',         label: 'Cash on Delivery', icon: <ShoppingBag className="w-4 h-4" />, enabled: paymentSettings.codEnabled !== false },
+                    { id: 'bKash',       label: 'bKash (Manual)',   icon: <BkashLogo className="w-5 h-5" />,   enabled: paymentSettings.bKashEnabled },
+                    { id: 'Nagad',       label: 'Nagad (Manual)',   icon: <NagadLogo className="w-5 h-5" />,   enabled: paymentSettings.nagadEnabled },
+                    { id: 'Rocket',      label: 'Rocket (Manual)',  icon: <RocketLogo className="w-5 h-5" />,  enabled: paymentSettings.rocketEnabled },
+                    { id: 'Bank',        label: 'Bank Transfer',    icon: <Landmark className="w-4 h-4" />,    enabled: paymentSettings.bankEnabled },
+                    { id: 'Stripe',      label: 'Card (Stripe)',    icon: <StripeLogo className="w-5 h-5" />,  enabled: !!paymentSettings.stripePublicKey },
+                    { id: 'PayPal',      label: 'PayPal',           icon: <PaypalLogo className="w-5 h-5" />,  enabled: !!paymentSettings.paypalClientId },
+                    { id: 'bKashAuto',   label: 'bKash (Auto)',     icon: <BkashLogo className="w-5 h-5" />,   enabled: !!paymentSettings.bKashAppKey },
+                    { id: 'NagadAuto',   label: 'Nagad (Auto)',     icon: <NagadLogo className="w-5 h-5" />,   enabled: !!paymentSettings.nagadMerchantId },
+                    { id: 'SSLCommerz',  label: 'SSLCommerz',       icon: <CreditCard className="w-4 h-4" />,  enabled: !!paymentSettings.sslCommerzStoreId },
+                    { id: 'Razorpay',    label: 'Razorpay',         icon: <CreditCard className="w-4 h-4" />,  enabled: !!paymentSettings.razorpayKeyId },
+                  ].filter(opt => opt.enabled).map(opt => (
+                    <label key={opt.id}
+                      className={`flex items-center gap-2 p-2.5 border rounded-xl cursor-pointer transition-all text-xs font-bold uppercase ${
+                        paymentMethod === opt.id
+                          ? 'bg-emerald-50 border-emerald-400 text-emerald-700 ring-2 ring-emerald-200'
+                          : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300'
+                      }`}>
+                      <input type="radio" name="pm" value={opt.id} checked={paymentMethod === opt.id}
+                        onChange={() => setPaymentMethod(opt.id)} className="sr-only" />
+                      <span className="flex-shrink-0">{opt.icon}</span>
+                      <span className="truncate">{opt.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {/* Manual payment txn id */}
+              {['bKash', 'Nagad', 'Rocket', 'Bank', 'CreditManual'].includes(paymentMethod) && (
+                <div>
+                  <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">Transaction / Reference ID *</label>
+                  <input value={manualTxId} onChange={(e) => setManualTxId(e.target.value)}
+                    placeholder="e.g. TXN1234567890"
+                    className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-emerald-400 focus:bg-white" />
+                </div>
+              )}
+
+              <button
+                type="submit"
+                className="w-full mt-2 py-3.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 text-white font-black uppercase rounded-xl shadow-lg flex items-center justify-center gap-2 cursor-pointer transition-all"
+              >
+                <Sparkles className="w-4 h-4" />
+                Place Order · {formatPrice(grandTotal)}
+              </button>
+            </form>
           </div>
         )}
       </div>

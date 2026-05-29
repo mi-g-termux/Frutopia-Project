@@ -342,13 +342,22 @@ export interface UserProfile {
 export interface SMSSettings {
   isEnabled: boolean;
   provider: 'twilio'; // extensible
+  /**
+   * Which channel to deliver OTPs over. Admin can switch at any time.
+   *   'sms'      → classic SMS via Twilio Programmable Messaging
+   *   'whatsapp' → Twilio WhatsApp API (uses whatsappFromNumber)
+   */
+  channel?: 'sms' | 'whatsapp';
   accountSid: string;
   authToken: string;
-  fromNumber: string; // e.g. +15550001234
+  fromNumber: string;            // SMS sender, e.g. +15550001234
+  whatsappFromNumber?: string;   // WhatsApp sender, e.g. +14155238886
   // OTP config
   otpEnabled: boolean;
   otpExpiryMinutes: number;
-  otpMessageTemplate: string; // supports {{code}} and {{store}}
+  otpMessageTemplate: string; // supports {{code}}, {{store}}, {{expiry}}
+  /** When true, the checkout page requires a verified OTP before placing the order. */
+  requireOtpAtCheckout?: boolean;
 }
 
 export interface EmailVerificationSettings {
