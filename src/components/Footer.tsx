@@ -108,9 +108,8 @@ export const Footer: React.FC = () => {
 
       </div>
 
-      <div className="max-w-7xl mx-auto mt-12 pt-6 border-t border-slate-800 text-center text-xs text-slate-500 font-medium space-y-1">
+      <div className="max-w-7xl mx-auto mt-12 pt-6 border-t border-slate-800 text-center text-xs text-slate-500 font-medium">
         <p>{siteSettings.trademarkText || '© 2026 quirky-fruity Ltd. All rights reserved.'}</p>
-        <p className="text-[10px] text-slate-600">Dynamic CMS Engine - Seamlessly configurable from settings panel inside /admin.</p>
       </div>
     </footer>
   );

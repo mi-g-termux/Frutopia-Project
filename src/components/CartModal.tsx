@@ -419,6 +419,12 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
       return false;
     }
 
+    // Email verification gate (admin: "Block Checkout Until Verified")
+    if (!emailVerified) {
+      toast.error('Email not verified: Please verify your email address before placing the order. Check your inbox for the verification link.');
+      return false;
+    }
+
     return true;
   };
 
@@ -1282,7 +1288,7 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
                     const visibleLabel = getPaymentButtonLabel(opt.displayName, opt.fallbackLabel, logoUrl);
                     return (
                     <label key={opt.id}
-                      className={`min-h-[60px] flex items-center ${visibleLabel ? 'justify-start' : 'justify-center'} gap-3 p-2.5 border rounded-xl cursor-pointer transition-all text-xs font-bold uppercase ${
+                      className={`min-h-[72px] flex items-center ${visibleLabel ? 'justify-start' : 'justify-center'} gap-3 px-3 py-2 border rounded-xl cursor-pointer transition-all text-xs font-bold uppercase ${
                         paymentMethod === opt.id
                           ? 'bg-emerald-50 border-emerald-400 text-emerald-700 ring-2 ring-emerald-200'
                           : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300'
@@ -1293,7 +1299,7 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
                         <img
                           src={logoUrl}
                           alt={visibleLabel || opt.fallbackLabel}
-                          className="max-h-10 max-w-[132px] w-auto object-contain flex-shrink-0"
+                          className="h-14 w-auto max-w-[200px] object-contain flex-shrink-0"
                           loading="lazy"
                           onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
                         />

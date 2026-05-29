@@ -1227,7 +1227,7 @@ await saveSiteSettings(JSON.parse(JSON.stringify(current)));
  > <Settings className="w-5 h-5" /> <span>CMS settings</span> </button> </nav> {/* Content Panel */}
  <main className="lg:col-span-9 bg-white border border-slate-200 rounded-2xl p-6 min-h-[500px] shadow-sm"> {/* TAB 1: PRODUCTS DISPLAY LIST */}
  {activeTab ==='products' && (
- <div className="space-y-6"> <div className="flex flex-col sm:flex-row items-center justify-between gap-4 border-b border-slate-100 pb-4"> <div> <h3 className="text-lg font-bold text-slate-800 uppercase">Products Catalog Inventory</h3> <p className="text-xs text-slate-500 font-medium">Update prices, replenish stock counts, or add new beverages.</p> </div> <button
+<div className="space-y-6"> <div className="flex flex-col sm:flex-row items-center justify-between gap-4 border-b border-slate-100 pb-4"> <div> <h3 className="text-lg font-bold text-slate-800 uppercase">Products Catalog Inventory</h3> <p className="text-xs text-slate-500 font-medium">Update prices, replenish stock counts, or add new products.</p> </div> <button
  onClick={() => handleOpenProductForm(null)}
  className="w-full sm:w-auto cursor-pointer flex items-center justify-center gap-1.5 px-4 py-2 bg-emerald-500 hover:bg-emerald-600 hover:translate-y-[-0.5px] text-white font-sans font-semibold uppercase text-xs rounded-xl shadow-xs transition-colors"
  > <Plus className="w-4 h-4" /> <span>Add New Product</span> </button> </div> {/* PRODUCTS MANAGEMENT POPUP MODAL BLOCK */}
@@ -1928,7 +1928,13 @@ await saveSiteSettings(JSON.parse(JSON.stringify(current)));
  value={trademarkTextVal}
  onChange={(e) => setTrademarkTextVal(e.target.value)}
  className="w-full bg-slate-50 border border-slate-200 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 rounded-lg px-2.5 py-1.5 text-xs font-semibold outline-none transition-all"
- /> </div> </div> <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 border-t border-slate-100 pt-4"> <div> <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">Branding Contact Mail</label> <input
+ /> </div> </div> <div> <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">Footer Brand Tagline <span className="normal-case font-normal text-slate-400">(short paragraph shown under the logo in the footer)</span></label> <textarea
+ rows={2}
+ value={footerCopy}
+ onChange={(e) => setFooterCopy(e.target.value)}
+ placeholder="e.g. quirky-fruity: serving dynamic organic fuel to nourish your daily vibrant self."
+ className="w-full bg-slate-50 border border-slate-200 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 rounded-lg px-2.5 py-1.5 text-xs font-semibold resize-none outline-none transition-all"
+ ></textarea> </div> <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 border-t border-slate-100 pt-4"> <div> <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">Branding Contact Mail</label> <input
  type="email"
  value={footerMail}
  onChange={(e) => setFooterMail(e.target.value)}
@@ -2491,7 +2497,7 @@ await saveSiteSettings(JSON.parse(JSON.stringify(current)));
  onChange={(e) => setPayTax(Number(e.target.value))}
  className="w-full bg-slate-50 border border-slate-200 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 rounded-lg px-2.5 py-1.5 text-xs font-semibold focus:outline-none"
  /> </div> </div> {/* ===== PAYMENT METHOD BRANDING SECTION ===== */}
- <div className="bg-violet-50/30 border border-dashed border-violet-200 rounded-xl p-4 space-y-4"> <div> <h4 className="text-[11px] font-extrabold uppercase text-violet-700 tracking-wider"> Payment Method Branding</h4> <p className="text-[9px] text-slate-500 mt-0.5">Customize the display name and logo image for each payment button shown to customers. Leave logo URL blank to use the default icon.</p> <p className="text-[9px] text-violet-600 font-semibold mt-0.5"> Recommended logo size: <strong>120 × 40 px</strong> (PNG/SVG, transparent background, max 200KB)</p> </div> {/* Helper: one row per payment method */}
+ <div className="bg-violet-50/30 border border-dashed border-violet-200 rounded-xl p-4 space-y-4"> <div> <h4 className="text-[11px] font-extrabold uppercase text-violet-700 tracking-wider"> Payment Method Branding</h4> <p className="text-[9px] text-slate-500 mt-0.5">Customize the display name and logo image for each payment button shown to customers. Leave logo URL blank to use the default icon.</p> <p className="text-[9px] text-violet-600 font-semibold mt-0.5"> Recommended logo size: <strong>240 × 80 px</strong> (PNG/SVG, transparent background, max 200KB) — fills the button cleanly without distortion.</p> </div> {/* Helper: one row per payment method */}
  {[
  { label:'bKash Instant (Auto)', nameVal: brandBkashAutoName, setName: setBrandBkashAutoName, logoVal: brandBkashAutoLogo, setLogo: setBrandBkashAutoLogo, color:'rose' },
  { label:'Nagad Instant (Auto)', nameVal: brandNagadAutoName, setName: setBrandNagadAutoName, logoVal: brandNagadAutoLogo, setLogo: setBrandNagadAutoLogo, color:'orange' },
@@ -2510,20 +2516,20 @@ await saveSiteSettings(JSON.parse(JSON.stringify(current)));
  onChange={(e) => setName(e.target.value)}
  placeholder={`${label} (leave blank for default)`}
  className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 focus:outline-none focus:border-violet-400"
- /> </div> <div> <label className="block text-[9px] font-extrabold text-slate-500 uppercase mb-0.5">{label} — Logo Image URL <span className="normal-case font-normal text-slate-400">(120×40px recommended)</span></label> <div className="flex items-center gap-2"> <input
+ /> </div> <div> <label className="block text-[9px] font-extrabold text-slate-500 uppercase mb-0.5">{label} — Logo Image URL <span className="normal-case font-normal text-violet-500">(recommended: 240 × 80 px, transparent PNG/SVG)</span></label> <div className="flex items-center gap-2"> <input
  type="text"
  value={logoVal}
  onChange={(e) => setLogo(e.target.value)}
  placeholder="https://... or leave blank for default"
  className="flex-1 bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 focus:outline-none focus:border-violet-400"
  /> {logoVal && (
- <img
+ <div className="flex items-center justify-center h-12 w-[120px] rounded-lg border border-slate-200 bg-white flex-shrink-0 p-1"> <img
  src={logoVal}
  alt="logo preview"
- className="h-6 max-w-[60px] object-contain rounded border border-slate-200 bg-white"
+ className="h-full w-auto max-w-full object-contain"
  onError={(e) => { (e.target as HTMLImageElement).style.display ='none'; }}
- /> )}
- </div> </div> </div> </div> ))}
+ /> </div> )}
+ </div> <p className="text-[9px] text-slate-400 mt-1">Preview shows the exact aspect ratio used on the checkout payment button.</p> </div> </div> </div> ))}
 
  {/* ===== BUTTON COLOR PICKERS ===== */}
  <div className="mt-4 pt-4 border-t border-violet-100"> <h5 className="text-[10px] font-extrabold uppercase text-violet-700 tracking-wider mb-3"> Payment Button Colors</h5> <p className="text-[9px] text-slate-500 mb-3">Pick the active background color for each payment button when selected by the customer.</p> <div className="grid grid-cols-2 md:grid-cols-5 gap-3"> {([

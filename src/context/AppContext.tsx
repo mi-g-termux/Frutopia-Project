@@ -1721,14 +1721,26 @@ const DEFAULT_ADMIN_ORDER_ALERT = `<!DOCTYPE html>
   // ── Tawk.to Live Chat ──────────────────────────────────────────────────────
   const triggerTawkToLoader = () => {
     if (!supportSettings?.isEnabled || !supportSettings.tawkToId) return;
-    document.querySelector('script[src*="tawk.to"]')?.remove();
-    document.querySelector('[class*="tawk-"]')?.remove();
+    // Cleanly remove any previously-injected widget / scripts
+    document.querySelectorAll('script[src*="embed.tawk.to"]').forEach(n => n.remove());
+    document.querySelectorAll('iframe[src*="tawk.to"], [class*="tawk-"], [id*="tawk"]').forEach(n => n.remove());
+    try { delete (window as any).Tawk_API; delete (window as any).Tawk_LoadStart; } catch {}
+
+    // Accept either "propertyId/widgetId" or "propertyId" (defaults to /default widget)
+    const raw = supportSettings.tawkToId.trim().replace(/^https?:\/\/embed\.tawk\.to\//i, '').replace(/\/+$/, '');
+    const path = raw.includes('/') ? raw : `${raw}/default`;
+
+    (window as any).Tawk_API = (window as any).Tawk_API || {};
+    (window as any).Tawk_LoadStart = new Date();
+
     const s = document.createElement('script');
     s.async = true;
-    s.src = `https://embed.tawk.to/${supportSettings.tawkToId}/default`;
+    s.src = `https://embed.tawk.to/${path}`;
     s.charset = 'UTF-8';
     s.setAttribute('crossorigin', '*');
-    document.head.appendChild(s);
+    const firstScript = document.getElementsByTagName('script')[0];
+    if (firstScript && firstScript.parentNode) firstScript.parentNode.insertBefore(s, firstScript);
+    else document.head.appendChild(s);
   };
 
   useEffect(() => { if (supportSettings?.isEnabled) triggerTawkToLoader(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [supportSettings]);

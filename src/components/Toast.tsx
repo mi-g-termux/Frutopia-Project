@@ -3,16 +3,18 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
-import { CheckCircle, AlertCircle, Info, X } from 'lucide-react';
+import React, { createContext, useContext, useState, useCallback } from 'react';
+import { CheckCircle2, AlertTriangle, Info, X } from 'lucide-react';
 
 export type ToastType = 'success' | 'error' | 'info';
 
 export interface ToastItem {
   id: string;
+  title: string;
+  body: string;
   message: string;
   type: ToastType;
-  visible: boolean; // for CSS enter/exit animation
+  visible: boolean;
 }
 
 interface ToastContextType {
@@ -24,44 +26,68 @@ interface ToastContextType {
 
 const ToastContext = createContext<ToastContextType | undefined>(undefined);
 
-// Single toast item with CSS-only slide-in / fade-out animation
-const ToastItem = ({ t, onRemove }: { t: ToastItem; onRemove: (id: string) => void }) => {
-  let borderColor = 'border-blue-200';
-  let icon = <Info className="w-5 h-5 text-blue-500" />;
-  let emoji = 'ℹ️';
-
-  if (t.type === 'success') {
-    borderColor = 'border-emerald-200';
-    icon = <CheckCircle className="w-5 h-5 text-emerald-600" />;
-    emoji = '🎉';
-  } else if (t.type === 'error') {
-    borderColor = 'border-rose-200';
-    icon = <AlertCircle className="w-5 h-5 text-rose-600" />;
-    emoji = '⚠️';
+// Split a single "message" string into a title + body line so the toast looks
+// like a modern card (title on top, supporting copy below). If the caller
+// already passed two sentences separated by ":" or ".", we keep them split.
+const splitMessage = (raw: string, type: ToastType): { title: string; body: string } => {
+  const defaults: Record<ToastType, string> = {
+    success: 'Success',
+    error: 'Something went wrong',
+    info: 'Heads up',
+  };
+  const msg = (raw || '').trim();
+  if (!msg) return { title: defaults[type], body: '' };
+  // Prefer "Title: body" split, then "Title. body" if first sentence is short.
+  if (msg.includes(':')) {
+    const i = msg.indexOf(':');
+    const title = msg.slice(0, i).trim();
+    const body = msg.slice(i + 1).trim();
+    if (title.length > 0 && title.length <= 40 && body.length > 0) return { title, body };
   }
+  const periodIdx = msg.indexOf('. ');
+  if (periodIdx > 0 && periodIdx <= 38) {
+    return { title: msg.slice(0, periodIdx).trim(), body: msg.slice(periodIdx + 1).trim() };
+  }
+  // Short message → use as body with a default title
+  return { title: defaults[type], body: msg };
+};
+
+const ToastItemView = ({ t, onRemove }: { t: ToastItem; onRemove: (id: string) => void }) => {
+  const ring =
+    t.type === 'success' ? 'ring-emerald-100' : t.type === 'error' ? 'ring-rose-100' : 'ring-sky-100';
+  const iconBg =
+    t.type === 'success' ? 'bg-emerald-500' : t.type === 'error' ? 'bg-rose-500' : 'bg-sky-500';
+  const Icon =
+    t.type === 'success' ? CheckCircle2 : t.type === 'error' ? AlertTriangle : Info;
 
   return (
     <div
       style={{
-        transition: 'opacity 0.3s ease, transform 0.3s ease',
+        transition: 'opacity .25s ease, transform .25s cubic-bezier(.2,.8,.2,1)',
         opacity: t.visible ? 1 : 0,
-        transform: t.visible ? 'translateY(0) scale(1)' : 'translateY(12px) scale(0.95)',
+        transform: t.visible ? 'translateY(0) scale(1)' : 'translateY(8px) scale(.97)',
       }}
-      className={`pointer-events-auto flex items-center gap-3 p-3.5 rounded-xl border shadow-md bg-white ${borderColor}`}
-      id={`toast-${t.id}`}
+      className={`pointer-events-auto flex items-start gap-3 pl-3 pr-2 py-3 rounded-2xl bg-white shadow-[0_10px_30px_-12px_rgba(15,23,42,0.18)] ring-1 ${ring} border border-slate-100 min-w-[280px] max-w-sm`}
+      role={t.type === 'error' ? 'alert' : 'status'}
     >
-      <div className="flex-shrink-0 text-base h-8 w-8 bg-slate-50 border border-slate-100 rounded-lg flex items-center justify-center select-none shadow-sm">
-        {emoji}
+      <div className={`flex-shrink-0 w-9 h-9 rounded-full ${iconBg} flex items-center justify-center shadow-sm`}>
+        <Icon className="w-5 h-5 text-white" strokeWidth={2.5} />
       </div>
-      <div className="flex-1">
-        <p className="text-xs font-semibold text-slate-800 leading-snug">
-          {t.message}
+      <div className="flex-1 min-w-0 pt-0.5">
+        <p className="text-[13px] font-semibold text-slate-900 leading-tight tracking-tight">
+          {t.title}
         </p>
+        {t.body && (
+          <p className="text-[12px] text-slate-500 leading-snug mt-0.5">
+            {t.body}
+          </p>
+        )}
       </div>
       <button
         type="button"
         onClick={() => onRemove(t.id)}
-        className="p-1 hover:bg-slate-100/60 rounded-lg transition-colors cursor-pointer text-slate-400 hover:text-slate-700"
+        aria-label="Dismiss notification"
+        className="flex-shrink-0 p-1.5 rounded-full text-slate-300 hover:text-slate-600 hover:bg-slate-50 transition-colors"
       >
         <X className="w-4 h-4" />
       </button>
@@ -74,14 +100,13 @@ export const ToastProvider = ({ children }: { children: React.ReactNode }) => {
 
   const toast = useCallback((message: string, type: ToastType = 'info') => {
     const id = Math.random().toString(36).substring(2, 9);
-    // Insert as invisible first, then flip visible on next tick for CSS transition
-    setToasts((prev) => [...prev, { id, message, type, visible: false }]);
+    const { title, body } = splitMessage(message, type);
+    setToasts((prev) => [...prev, { id, title, body, message, type, visible: false }]);
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         setToasts((prev) => prev.map(t => t.id === id ? { ...t, visible: true } : t));
       });
     });
-    // Start fade-out after 3.7s, remove after 4s
     setTimeout(() => {
       setToasts((prev) => prev.map(t => t.id === id ? { ...t, visible: false } : t));
     }, 3700);
@@ -96,7 +121,7 @@ export const ToastProvider = ({ children }: { children: React.ReactNode }) => {
 
   const removeToast = (id: string) => {
     setToasts((prev) => prev.map(t => t.id === id ? { ...t, visible: false } : t));
-    setTimeout(() => setToasts((prev) => prev.filter(t => t.id !== id)), 300);
+    setTimeout(() => setToasts((prev) => prev.filter(t => t.id !== id)), 250);
   };
 
   return (
@@ -104,7 +129,7 @@ export const ToastProvider = ({ children }: { children: React.ReactNode }) => {
       {children}
       <div className="fixed bottom-5 right-5 z-[200] flex flex-col-reverse gap-3 max-w-sm w-full font-sans pointer-events-none">
         {toasts.map((t) => (
-          <React.Fragment key={t.id}><ToastItem t={t} onRemove={removeToast} /></React.Fragment>
+          <React.Fragment key={t.id}><ToastItemView t={t} onRemove={removeToast} /></React.Fragment>
         ))}
       </div>
     </ToastContext.Provider>
