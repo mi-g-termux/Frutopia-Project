@@ -126,6 +126,7 @@ import {
   onSupabaseSettingsChange,
 } from '../supabase';
 import { buildInvoicePdfBase64 } from '../lib/invoicePdf';
+import { resolveCurrencySymbol } from '../lib/currency';
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  CONTEXT TYPE DEFINITION
@@ -208,6 +209,17 @@ interface AppContextType {
   sendEmailVerification: (email: string) => Promise<{ success: boolean; message: string }>;
   verifyEmailToken: (email: string, token: string) => { success: boolean; message: string };
   isEmailVerified: (email: string) => boolean;
+
+  // Checkout-time email OTP (works for both registered & guest emails)
+  sendCheckoutEmailOtp: (email: string) => Promise<{ success: boolean; message: string }>;
+  verifyCheckoutEmailOtp: (email: string, otp: string) => { success: boolean; message: string };
+
+  // Auto-creates a user account after a successful checkout (if missing)
+  // and triggers a password-setup email so the user can pick a password later.
+  ensureUserAfterCheckout: (data: {
+    email: string; name: string; phone: string;
+    address: string; city: string; postalCode?: string;
+  }) => Promise<{ created: boolean; passwordSetupSent: boolean }>;
 
   // Delivery zones
   deliveryZones: DeliveryZone[];
@@ -1276,6 +1288,141 @@ const DEFAULT_ADMIN_ORDER_ALERT = `<!DOCTYPE html>
     return { success: true, message: 'Email verified successfully!' };
   };
 
+  // ── Checkout-time Email OTP ────────────────────────────────────────────────
+  // Works for ANY email (registered or guest). On successful verify, we ALSO
+  // flip the EV-store entry to verified=true so the existing isEmailVerified()
+  // check used by the "Block Checkout Until Verified" gate also passes.
+  const CHECKOUT_OTP_KEY = 'qf_checkout_otp_store';
+  const getCheckoutOtpStore = (): Record<string, { code: string; expiresAt: number }> => {
+    try { return JSON.parse(localStorage.getItem(CHECKOUT_OTP_KEY) || '{}'); } catch { return {}; }
+  };
+  const setCheckoutOtpEntry = (key: string, entry: { code: string; expiresAt: number }) => {
+    try {
+      const st = getCheckoutOtpStore();
+      st[key] = entry;
+      localStorage.setItem(CHECKOUT_OTP_KEY, JSON.stringify(st));
+    } catch {}
+  };
+  const deleteCheckoutOtpEntry = (key: string) => {
+    try {
+      const st = getCheckoutOtpStore();
+      delete st[key];
+      localStorage.setItem(CHECKOUT_OTP_KEY, JSON.stringify(st));
+    } catch {}
+  };
+
+  const sendCheckoutEmailOtp = async (email: string): Promise<{ success: boolean; message: string }> => {
+    const key = (email || '').trim().toLowerCase();
+    if (!key || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(key)) {
+      return { success: false, message: 'Please enter a valid email address first.' };
+    }
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const expiryMinutes = smtpSettings?.otpExpiryMinutes || 10;
+    setCheckoutOtpEntry(key, { code, expiresAt: Date.now() + expiryMinutes * 60_000 });
+    const storeName = siteSettings?.websiteName || 'E-Shop';
+    try {
+      await fetch('/api/send-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          to: email,
+          subject: `Your ${storeName} checkout verification code`,
+          html: `<div style="font-family:sans-serif;max-width:480px;margin:auto;padding:24px;background:#f8fafc;border-radius:12px;">
+            <h2 style="color:#0f172a;margin:0 0 12px;">Verify your email to complete checkout</h2>
+            <p style="color:#475569;font-size:14px;">Use the code below to verify your email and place your order at <strong>${storeName}</strong>.</p>
+            <div style="background:#fff;border:2px dashed #10b981;border-radius:10px;padding:18px;margin:18px 0;text-align:center;font-size:30px;letter-spacing:8px;font-weight:800;color:#065f46;">${code}</div>
+            <p style="color:#64748b;font-size:12px;">This code expires in ${expiryMinutes} minutes. If you did not request this, you can safely ignore this email.</p>
+          </div>`,
+          smtpSettings: smtpSettings ? { ...smtpSettings, fromName: smtpSettings.fromName || storeName } : null,
+        }),
+      });
+    } catch { console.log(`[CHECKOUT OTP DEV] Code for ${email}: ${code}`); }
+    return { success: true, message: `Verification code sent to ${email}.` };
+  };
+
+  const verifyCheckoutEmailOtp = (email: string, otp: string): { success: boolean; message: string } => {
+    const key = (email || '').trim().toLowerCase();
+    const entry = getCheckoutOtpStore()[key];
+    if (!entry) return { success: false, message: 'No code found. Please request a new one.' };
+    if (Date.now() > entry.expiresAt) { deleteCheckoutOtpEntry(key); return { success: false, message: 'Code expired. Request a new one.' }; }
+    if (entry.code !== (otp || '').trim()) return { success: false, message: 'Incorrect code. Try again.' };
+    deleteCheckoutOtpEntry(key);
+    // Also flip the EV-store entry so the existing "Block Checkout Until Verified"
+    // gate (isEmailVerified) recognises this email as verified.
+    try {
+      const evStore = getEvStore();
+      evStore[key] = { token: 'checkout-otp', expiresAt: Date.now() + 365 * 24 * 3600_000, verified: true };
+      localStorage.setItem(EV_KEY, JSON.stringify(evStore));
+    } catch {}
+    return { success: true, message: 'Email verified!' };
+  };
+
+  // ── ensureUserAfterCheckout ───────────────────────────────────────────────
+  // After a successful order, make sure a user account exists for this email.
+  // If not, create one with an empty password hash and email an OTP the user
+  // can use through the "Forgot password" flow to set a password. Either way,
+  // log the customer in on the device.
+  const ensureUserAfterCheckout = async (data: {
+    email: string; name: string; phone: string;
+    address: string; city: string; postalCode?: string;
+  }): Promise<{ created: boolean; passwordSetupSent: boolean }> => {
+    const key = (data.email || '').trim().toLowerCase();
+    if (!key) return { created: false, passwordSetupSent: false };
+    const profiles = getUserProfiles();
+    const existing = profiles[key];
+    if (existing) {
+      setCurrentUserSession(existing.email);
+      setUserProfileState(existing);
+      setCurrentUserEmail(existing.email);
+      return { created: false, passwordSetupSent: false };
+    }
+    const newProfile: UserProfile = {
+      id: Date.now().toString(36),
+      name: data.name,
+      email: key,
+      phone: data.phone || '',
+      address: data.address || '',
+      city: data.city || '',
+      passwordHash: '', // null/empty password — user will set one via OTP link
+    };
+    await saveUserToFirestore(newProfile);
+    setCurrentUserSession(newProfile.email);
+    setUserProfileState(newProfile);
+    setCurrentUserEmail(newProfile.email);
+
+    // Send a "set your password" email. We reuse the existing OTP store so the
+    // user can drop the code into the standard "Forgot password" flow.
+    let passwordSetupSent = false;
+    try {
+      const code = String(Math.floor(100000 + Math.random() * 900000));
+      const expiryMinutes = smtpSettings?.otpExpiryMinutes || 30;
+      setOtpEntry(key, { code, expiresAt: Date.now() + expiryMinutes * 60_000 });
+      const storeName = siteSettings?.websiteName || 'E-Shop';
+      await fetch('/api/send-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          to: newProfile.email,
+          subject: `Set your ${storeName} account password`,
+          html: `<div style="font-family:sans-serif;max-width:480px;margin:auto;padding:24px;background:#f8fafc;border-radius:12px;">
+            <h2 style="color:#0f172a;margin:0 0 12px;">Welcome to ${storeName}, ${newProfile.name}!</h2>
+            <p style="color:#475569;font-size:14px;">We created an account for you so you can track your orders. To finish setting up, choose a password using the one-time code below.</p>
+            <p style="color:#475569;font-size:14px;margin:8px 0 0;">On the site, open <strong>Sign in → Forgot password</strong>, enter this email, then paste the code:</p>
+            <div style="background:#fff;border:2px dashed #6366f1;border-radius:10px;padding:18px;margin:18px 0;text-align:center;font-size:30px;letter-spacing:8px;font-weight:800;color:#3730a3;">${code}</div>
+            <p style="color:#64748b;font-size:12px;">This code expires in ${expiryMinutes} minutes. You are already logged in on the device where you placed the order.</p>
+          </div>`,
+          smtpSettings: smtpSettings ? { ...smtpSettings, fromName: smtpSettings.fromName || storeName } : null,
+        }),
+      });
+      passwordSetupSent = true;
+    } catch (err) {
+      console.warn('Password-setup email failed (non-blocking):', err);
+    }
+    return { created: true, passwordSetupSent };
+  };
+
+
+
   // ── SMS OTP (unchanged) ─────────────────────────────────────────────────────
   const SMS_OTP_KEY = 'qf_sms_otp_store';
   const getSmsOtpStore = (): Record<string, { code: string; expiresAt: number; attempts: number }> => {
@@ -1799,11 +1946,11 @@ const DEFAULT_ADMIN_ORDER_ALERT = `<!DOCTYPE html>
   useEffect(() => { localStorage.setItem('qf_cart', JSON.stringify(cart)); }, [cart]);
 
   const formatPrice = useCallback((amount: number): string => {
-    const sym = siteSettings?.currencySymbol || '$';
+    const sym = resolveCurrencySymbol(siteSettings);
     const pos = siteSettings?.currencyPosition || 'before';
     const formatted = amount.toFixed(2);
     return pos === 'after' ? `${formatted}${sym}` : `${sym}${formatted}`;
-  }, [siteSettings?.currencySymbol, siteSettings?.currencyPosition]);
+  }, [siteSettings?.currencySymbol, siteSettings?.currency, siteSettings?.currencyPosition]);
 
   // ── reinitializeFirebase — backward-compat wrapper ─────────────────────────
   /**
@@ -1979,6 +2126,7 @@ const DEFAULT_ADMIN_ORDER_ALERT = `<!DOCTYPE html>
         saveSiteSettings, saveSMTPSettings, savePaymentSettings, saveAdminSettings,
         saveSupportSettings, saveSMSSettings, saveEmailVerificationSettings,
         sendSmsOtp, verifySmsOtp, sendEmailVerification, verifyEmailToken, isEmailVerified,
+        sendCheckoutEmailOtp, verifyCheckoutEmailOtp, ensureUserAfterCheckout,
         addToCart, removeFromCart, updateCartQuantity, clearCart, applyCouponCode, removeCoupon,
         setAdminLoggedIn,
         triggerTawkToLoader,

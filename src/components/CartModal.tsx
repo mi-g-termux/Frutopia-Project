@@ -6,10 +6,12 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { useToast } from './Toast';
-import { X, Minus, Plus, Trash2, Tag, Ticket, CreditCard, ShoppingBag, Landmark, Printer, Phone, Shield, CheckCircle2 } from 'lucide-react';
+import { X, Minus, Plus, Trash2, Tag, Ticket, CreditCard, ShoppingBag, Landmark, Printer, Phone, Mail, Shield, CheckCircle2 } from 'lucide-react';
 import { Order, CartItem } from '../types';
 import { BkashLogo, NagadLogo, StripeLogo, PaypalLogo, VisaMastercardLogo, RocketLogo, QuirkyFruityLogo } from './PaymentLogos';
 import { COUNTRY_PHONE_RULES, findRule, validatePhone, toE164 } from '../lib/phoneValidation';
+import { resolveCurrencySymbol } from '../lib/currency';
+import CountryDialPicker from './CountryDialPicker';
 
 interface CartModalProps {
   isOpen: boolean;
@@ -119,6 +121,11 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
     smsSettings,
     sendSmsOtp,
     verifySmsOtp,
+    emailVerificationSettings,
+    isEmailVerified,
+    sendCheckoutEmailOtp,
+    verifyCheckoutEmailOtp,
+    ensureUserAfterCheckout,
   } = useApp();
 
   const toast = useToast();
@@ -275,6 +282,14 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
   const [otpSending, setOtpSending] = useState(false);
   const [otpVerifyingPhone, setOtpVerifyingPhone] = useState(''); // E.164 we last sent code to
 
+  // Email OTP verification state — used when admin enabled
+  // "Block Checkout Until Verified" and the customer has not verified yet.
+  const [emailOtpSent, setEmailOtpSent] = useState(false);
+  const [emailOtpCode, setEmailOtpCode] = useState('');
+  const [emailOtpVerified, setEmailOtpVerified] = useState(false);
+  const [emailOtpSending, setEmailOtpSending] = useState(false);
+  const [emailOtpVerifyingEmail, setEmailOtpVerifyingEmail] = useState('');
+
   // Helper: split a stored "+880 1712345678" into dial + local parts
   const splitStoredPhone = (full: string): { dial: string; local: string } => {
     const trimmed = (full || '').trim();
@@ -309,6 +324,14 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
     setOtpVerifyingPhone('');
   }, [dialCode, phoneLocal]);
 
+  // Reset email-OTP whenever the email changes
+  useEffect(() => {
+    setEmailOtpSent(false);
+    setEmailOtpVerified(false);
+    setEmailOtpCode('');
+    setEmailOtpVerifyingEmail('');
+  }, [email]);
+
   // Convenience: live validation feedback for the phone field
   const phoneValidation = useMemo(
     () => validatePhone(dialCode, phoneLocal),
@@ -320,6 +343,18 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
     !!(smsSettings?.isEnabled && smsSettings?.otpEnabled && smsSettings?.requireOtpAtCheckout);
   const otpChannelLabel =
     smsSettings?.channel === 'whatsapp' ? 'WhatsApp' : 'SMS';
+
+  // Email-OTP gate: admin enabled "Require Email Verification" + "Block Checkout
+  // Until Verified", customer is not already a logged-in user whose email is
+  // verified, and the email they typed hasn't been verified this session.
+  const normalizedEmail = (email || '').trim().toLowerCase();
+  const emailAlreadyVerified =
+    !!normalizedEmail && (isEmailVerified(normalizedEmail) ||
+      (emailOtpVerified && emailOtpVerifyingEmail === normalizedEmail));
+  const emailVerificationRequired =
+    !!(emailVerificationSettings?.isEnabled &&
+       emailVerificationSettings?.requireVerificationBeforeOrder) &&
+    !emailAlreadyVerified;
   
   // Interactive Automatic Gateway Simulation states
   const [isAutoPortalOpen, setIsAutoPortalOpen] = useState(false);
@@ -420,8 +455,9 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
     }
 
     // Email verification gate (admin: "Block Checkout Until Verified")
-    if (!emailVerified) {
-      toast.error('Email not verified: Please verify your email address before placing the order. Check your inbox for the verification link.');
+    // — now satisfied by an inline OTP step instead of a mailed link.
+    if (emailVerificationRequired) {
+      toast.error('Please verify your email with the code we sent before placing the order.');
       return false;
     }
 
@@ -469,6 +505,46 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
       toast.error(res.message);
     }
   };
+
+  /** Send a 6-digit verification code to the email currently entered in the form. */
+  const handleSendEmailOtp = async () => {
+    if (!normalizedEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+      toast.error('Please enter a valid email address first.');
+      return;
+    }
+    setEmailOtpSending(true);
+    try {
+      const res = await sendCheckoutEmailOtp(normalizedEmail);
+      if (res.success) {
+        setEmailOtpSent(true);
+        setEmailOtpVerified(false);
+        setEmailOtpVerifyingEmail(normalizedEmail);
+        toast.success(res.message);
+      } else {
+        toast.error(res.message);
+      }
+    } catch {
+      toast.error('Could not send verification code. Please try again.');
+    } finally {
+      setEmailOtpSending(false);
+    }
+  };
+
+  const handleVerifyEmailOtp = () => {
+    if (!emailOtpCode.trim()) {
+      toast.error('Enter the code we emailed you.');
+      return;
+    }
+    const res = verifyCheckoutEmailOtp(normalizedEmail, emailOtpCode.trim());
+    if (res.success) {
+      setEmailOtpVerified(true);
+      setEmailOtpVerifyingEmail(normalizedEmail);
+      toast.success('Email verified!');
+    } else {
+      toast.error(res.message);
+    }
+  };
+
 
   const handleCheckoutSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -573,9 +649,23 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
       }
 
       const placedOrder = await placeOrder(orderData);
-      
+
       // ✅ Save email so review button shows for this user's ordered products
       setCurrentUserEmail(email.trim().toLowerCase());
+
+      // ✅ Auto-create a user account (if missing) and email a password-setup
+      // code so the customer can sign back in later. They are already logged in
+      // on this device.
+      try {
+        const res = await ensureUserAfterCheckout({
+          email, name: customerName, phone, address, city, postalCode,
+        });
+        if (res.created) {
+          toast.success(res.passwordSetupSent
+            ? 'Account created. Check your email for a code to set your password.'
+            : 'Account created. Use "Forgot password" to set a password later.');
+        }
+      } catch (e) { console.warn('ensureUserAfterCheckout failed (non-blocking):', e); }
 
       toast.success(`Order placed successfully. Order Number: ${placedOrder.orderNumber}`);
       setPlacedInvoiceOrder(placedOrder);
@@ -611,7 +701,16 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
       transactionId: txnRef,
     };
     const placedOrder = await placeOrder(updatedOrder);
-    if (orderInfo.email) setCurrentUserEmail(orderInfo.email.trim().toLowerCase());
+    if (orderInfo.email) {
+      setCurrentUserEmail(orderInfo.email.trim().toLowerCase());
+      try {
+        await ensureUserAfterCheckout({
+          email: orderInfo.email, name: orderInfo.customerName || '',
+          phone: orderInfo.phone || '', address: orderInfo.address || '',
+          city: orderInfo.city || '', postalCode: orderInfo.postalCode || '',
+        });
+      } catch (e) { console.warn('ensureUserAfterCheckout failed (non-blocking):', e); }
+    }
     toast.success(`Payment confirmed. Order: ${placedOrder.orderNumber}`);
     setPlacedInvoiceOrder(placedOrder);
     clearCart();
@@ -831,7 +930,7 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
     if (!placedInvoiceOrder) return;
     const order = placedInvoiceOrder;
     const storeName = siteSettings.websiteName || 'Store';
-    const sym = siteSettings.currencySymbol || '$';
+    const sym = resolveCurrencySymbol(siteSettings);
     const pos = (siteSettings.currencyPosition || 'before') as 'before' | 'after';
     const fmt = (n: number) => pos === 'after' ? `${n.toFixed(2)}${sym}` : `${sym}${n.toFixed(2)}`;
 
@@ -1172,21 +1271,60 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
                     className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-emerald-400 focus:bg-white" />
                 </div>
 
+                {/* Email OTP verification block — only when admin requires it
+                    and the email isn't already verified for this session. */}
+                {emailVerificationRequired && (
+                  <div className="col-span-2 bg-indigo-50 border border-indigo-200 rounded-xl p-3">
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                      <span className="text-[11px] font-bold uppercase text-indigo-800 flex items-center gap-1">
+                        <Mail className="w-3.5 h-3.5" />
+                        Email Verification
+                      </span>
+                      {emailOtpVerified && emailOtpVerifyingEmail === normalizedEmail ? (
+                        <span className="text-[10px] font-bold uppercase text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full flex items-center gap-1">
+                          <CheckCircle2 className="w-3 h-3" /> Verified
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          disabled={!normalizedEmail || emailOtpSending}
+                          onClick={handleSendEmailOtp}
+                          className="text-[10px] font-bold uppercase bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white px-2.5 py-1 rounded-full cursor-pointer"
+                        >
+                          {emailOtpSending ? 'Sending…' : emailOtpSent ? 'Resend code' : 'Send email code'}
+                        </button>
+                      )}
+                    </div>
+                    {emailOtpSent && !(emailOtpVerified && emailOtpVerifyingEmail === normalizedEmail) && (
+                      <div className="flex gap-2">
+                        <input
+                          inputMode="numeric"
+                          maxLength={8}
+                          value={emailOtpCode}
+                          onChange={(e) => setEmailOtpCode(e.target.value.replace(/[^\d]/g, ''))}
+                          placeholder="6-digit code"
+                          className="flex-1 px-3 py-2 bg-white border border-indigo-300 rounded-lg text-sm font-mono tracking-widest text-center outline-none focus:ring-2 focus:ring-indigo-400"
+                        />
+                        <button type="button" onClick={handleVerifyEmailOtp}
+                          className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold uppercase rounded-lg cursor-pointer">
+                          Verify
+                        </button>
+                      </div>
+                    )}
+                    <p className="text-[10px] text-indigo-700/80 mt-2">
+                      We'll email a 6-digit code to verify it's you. No mailbox round-trip needed.
+                    </p>
+                  </div>
+                )}
+
                 {/* Country code + phone number */}
                 <div className="col-span-2">
                   <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">
                     Mobile Number * <span className="text-slate-400 normal-case font-medium">(used for order updates{otpRequired ? ` & ${otpChannelLabel} OTP` : ''})</span>
                   </label>
                   <div className="flex gap-2">
-                    <select
-                      value={dialCode}
-                      onChange={(e) => setDialCode(e.target.value)}
-                      className="px-2 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-emerald-400 focus:bg-white cursor-pointer max-w-[140px]"
-                    >
-                      {COUNTRY_PHONE_RULES.map(c => (
-                        <option key={c.dial} value={c.dial}>{c.dial} {c.name}</option>
-                      ))}
-                    </select>
+                    <CountryDialPicker value={dialCode} onChange={setDialCode} />
+
                     <input
                       required
                       inputMode="tel"
