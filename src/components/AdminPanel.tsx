@@ -6,6 +6,7 @@
 import React, { useState, useEffect } from'react';
 import { useApp } from'../context/AppContext';
 import { useToast } from'./Toast';
+import { AdminSectionSettings } from'./AdminSectionSettings';
 import { getIsFirebaseConfigured, DYNAMIC_FIREBASE_KEY } from'../firebase';
 import {
  fileToBase64,
@@ -36,6 +37,7 @@ import {
  Phone,
  RefreshCw,
  Download,
+ Palette,
 } from'lucide-react';
 import { Product, Coupon, Category, DeliveryZone } from'../types';
 import { simpleHash } from'../db';
@@ -119,7 +121,7 @@ export const AdminPanel: React.FC = () => {
  }, []);
 
  // Primary active Admin tab
- const [activeTab, setActiveTab] = useState<'products' |'orders' |'coupons' |'reviews' |'subscribers' |'settings'>('products');
+ const [activeTab, setActiveTab] = useState<'products' |'orders' |'coupons' |'reviews' |'subscribers' |'sections' |'settings'>('products');
 
  // Multi-Section settings tab index
  const [settingsSection, setSettingsSection] = useState<'general' |'smtp' |'sms' |'payment' |'security' |'support' |'delivery' |'firebase'>('general');
@@ -1240,6 +1242,13 @@ await saveSiteSettings(JSON.parse(JSON.stringify(current)));
  :'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
  }`}
  > <Users className="w-5 h-5" /> <span>Subscribers ({newsletterSubscribers.length})</span> </button> <button
+ onClick={() => setActiveTab('sections')}
+ className={`flex-shrink-0 flex items-center gap-2.5 px-4 py-3 rounded-xl border text-xs font-semibold uppercase transition-all cursor-pointer ${
+ activeTab ==='sections'
+ ?'bg-emerald-600 text-white border-transparent shadow-sm'
+ :'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+ }`}
+ > <Palette className="w-5 h-5" /> <span>Page Sections</span> </button> <button
  onClick={() => setActiveTab('settings')}
  className={`flex-shrink-0 flex items-center gap-2.5 px-4 py-3 rounded-xl border text-xs font-semibold uppercase transition-all cursor-pointer ${
  activeTab ==='settings'
@@ -1802,6 +1811,17 @@ await saveSiteSettings(JSON.parse(JSON.stringify(current)));
  > </button></td></tr> ))}
  </tbody></table> </div> </div> )}
  </div> )}
+
+ {/* TAB 5.5: PAGE SECTIONS (NEWSLETTER & TESTIMONIALS) */}
+ {activeTab ==='sections' && (
+ <div className="space-y-6">
+ <div>
+ <h3 className="text-lg font-bold text-slate-800 uppercase mb-2">Customize Page Sections</h3>
+ <p className="text-xs text-slate-500 font-medium mb-6">Edit the Newsletter Registration and Client Testimonials sections below. Changes are saved to Firebase and appear instantly on your website.</p>
+ </div>
+ <AdminSectionSettings />
+ </div>
+ )}
 
  {/* TAB 6: GLOBAL CMS SITE SETTINGS MULTI SECTIONS */}
  {activeTab ==='settings' && (

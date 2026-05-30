@@ -62,6 +62,7 @@ export async function startSSLCommerz(o: OrderBasics): Promise<void> {
 declare global {
   interface Window {
     Razorpay?: any;
+    Stripe?: any;
   }
 }
 function loadRzpScript(): Promise<void> {
@@ -71,6 +72,17 @@ function loadRzpScript(): Promise<void> {
     s.src = 'https://checkout.razorpay.com/v1/checkout.js';
     s.onload = () => resolve();
     s.onerror = () => reject(new Error('Failed to load Razorpay'));
+    document.body.appendChild(s);
+  });
+}
+
+function loadStripeScript(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (window.Stripe) return resolve();
+    const s = document.createElement('script');
+    s.src = 'https://js.stripe.com/v3/';
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error('Failed to load Stripe'));
     document.body.appendChild(s);
   });
 }
@@ -116,4 +128,67 @@ export async function startRazorpay(
     modal: { ondismiss: () => onFailure?.(new Error('Razorpay closed')) },
   });
   rzp.open();
+}
+
+// ---- Stripe (Auto) ----
+export async function startStripe(
+  o: OrderBasics,
+  publishableKey: string,
+  onSuccess: (p: { paymentIntentId: string; status: string }) => Promise<void> | void,
+  onFailure?: (err: any) => void,
+): Promise<void> {
+  try {
+    // Create payment intent
+    const r = await fetch('/api/stripe/create-payment-intent', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ amount: o.amount, currency: 'usd' }),
+    });
+    const data = await r.json();
+    if (!r.ok || !data?.clientSecret) {
+      throw new Error(data?.error || 'Stripe payment intent failed');
+    }
+
+    await loadStripeScript();
+    const stripe = window.Stripe!(publishableKey);
+    if (!stripe) throw new Error('Stripe failed to initialize');
+
+    // Redirect to Stripe checkout
+    const { error } = await stripe.redirectToCheckout({
+      clientSecret: data.clientSecret,
+      mode: 'payment',
+      successUrl: `${window.location.origin}/?payment=success&orderId=${encodeURIComponent(o.orderId)}`,
+      cancelUrl: `${window.location.origin}/?payment=cancelled&orderId=${encodeURIComponent(o.orderId)}`,
+    });
+
+    if (error) {
+      onFailure?.(new Error(error.message));
+    }
+  } catch (err: any) {
+    onFailure?.(err);
+  }
+}
+
+// ---- PayPal (Auto) ----
+export async function startPayPal(
+  o: OrderBasics,
+  onSuccess: (p: { orderId: string; payerId: string }) => Promise<void> | void,
+  onFailure?: (err: any) => void,
+): Promise<void> {
+  try {
+    const r = await fetch('/api/paypal/create-order', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ amount: o.amount, currency: 'USD' }),
+    });
+    const data = await r.json();
+    if (!r.ok || !data?.approvalUrl) {
+      throw new Error(data?.error || 'PayPal order creation failed');
+    }
+
+    // Redirect to PayPal for approval
+    window.location.href = data.approvalUrl;
+  } catch (err: any) {
+    onFailure?.(err);
+  }
 }

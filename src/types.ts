@@ -167,6 +167,14 @@ export interface SiteSettings {
   trademarkText: string;
   newsletterSectionIcon?: string; // SVG string or URL; defaults to built-in envelope icon
   testimonialSectionIcon?: string; // SVG string or URL; defaults to built-in star icon
+  // Newsletter Section Customization
+  newsletterTitle?: string;
+  newsletterSubtitle?: string;
+  newsletterSubmitButtonText?: string;
+  // Testimonial Section Customization
+  testimonialTitle?: string;
+  testimonialSubtitle?: string;
+  testimonialDisplayCount?: number; // How many testimonials to show
   currency?: string;        // ISO code e.g. USD, BDT, EUR, GBP, INR
   currencySymbol?: string;  // Display symbol e.g. $, ৳, €, £, ₹
   currencyPosition?: 'before' | 'after'; // symbol before or after amount

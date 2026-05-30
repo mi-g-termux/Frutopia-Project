@@ -28,6 +28,11 @@ export const Newsletter: React.FC = () => {
   const [message, setMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // Use customizable settings from Firebase with fallbacks
+  const newsletterTitle = siteSettings?.newsletterTitle || 'Newsletter Registration';
+  const newsletterSubtitle = siteSettings?.newsletterSubtitle || 'Stay updated with fresh recipes & exclusive coupons';
+  const submitButtonText = siteSettings?.newsletterSubmitButtonText || 'Submit Email';
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!email.trim()) return;
@@ -52,7 +57,7 @@ export const Newsletter: React.FC = () => {
     }
   };
 
-  const customIcon = siteSettings.newsletterSectionIcon?.trim();
+  const customIcon = siteSettings?.newsletterSectionIcon?.trim();
 
   return (
     <section
@@ -76,10 +81,10 @@ export const Newsletter: React.FC = () => {
 
         <div className="text-center mb-8 mt-4">
           <h2 className="text-xl sm:text-2xl font-bold text-slate-800 uppercase tracking-wide">
-            Newsletter Registration
+            {newsletterTitle}
           </h2>
           <p className="text-xs text-slate-400 font-semibold uppercase tracking-wider mt-1.5">
-            Stay updated with fresh recipes &amp; exclusive coupons
+            {newsletterSubtitle}
           </p>
         </div>
 
@@ -168,7 +173,7 @@ export const Newsletter: React.FC = () => {
               id="news-submit-btn"
             >
               <Send className="w-4 h-4 text-emerald-400" />
-              <span>{isSubmitting ? 'SUBMITTING...' : 'SUBMIT EMAIL'}</span>
+              <span>{isSubmitting ? 'SUBMITTING...' : submitButtonText.toUpperCase()}</span>
             </button>
           </div>
 
