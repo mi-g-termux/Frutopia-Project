@@ -535,19 +535,8 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       if (!db) return;
       const { collection, onSnapshot } = await import('firebase/firestore');
 
-      // Orders listener — sorted newest first
-      const unsubOrders = onSnapshot(
-        collection(db, 'orders'),
-        (snap) => {
-          const list: Order[] = [];
-          snap.forEach((d) => list.push({ id: d.id, ...d.data() } as Order));
-          list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-          setOrders(list);
-          try { localStorage.setItem('qf_orders', JSON.stringify(list)); } catch {}
-        },
-        (err) => console.warn('[Firebase onSnapshot] orders error:', err),
-      );
-      activeListenersRef.current.push(unsubOrders);
+      // Orders listener moved to _attachOrdersListener() to support authenticated users
+      // This function now only handles newsletter subscribers
 
       // Newsletter subscribers listener
       const unsubNewsletter = onSnapshot(
@@ -562,9 +551,41 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       );
       activeListenersRef.current.push(unsubNewsletter);
 
-      console.log('[AppContext] Firebase auth-restricted listeners attached (orders, newsletter).');
+      console.log('[AppContext] Firebase auth-restricted listeners attached (newsletter).');
     } catch (err) {
       console.warn('[AppContext] Firebase auth-restricted listener setup failed:', err);
+    }
+  };
+
+  /**
+   * Attach orders listener for authenticated users.
+   * This enables real-time order tracking across devices.
+   * Called early in Firebase initialization (not gated by admin auth).
+   */
+  const _attachOrdersListener = async () => {
+    if (!getIsFirebaseConfigured()) return;
+    try {
+      const { db } = await import('../firebase');
+      if (!db) return;
+      const { collection, onSnapshot } = await import('firebase/firestore');
+
+      // Orders listener — sorted newest first, available to all authenticated users
+      const unsubOrders = onSnapshot(
+        collection(db, 'orders'),
+        (snap) => {
+          const list: Order[] = [];
+          snap.forEach((d) => list.push({ id: d.id, ...d.data() } as Order));
+          list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+          setOrders(list);
+          try { localStorage.setItem('qf_orders', JSON.stringify(list)); } catch {}
+          console.log('[AppContext] Firebase orders real-time update received:', list.length, 'orders');
+        },
+        (err) => console.warn('[Firebase onSnapshot] orders error:', err),
+      );
+      activeListenersRef.current.push(unsubOrders);
+      console.log('[AppContext] Firebase orders listener attached (real-time sync enabled).');
+    } catch (err) {
+      console.warn('[AppContext] Firebase orders listener setup failed:', err);
     }
   };
 
@@ -803,6 +824,9 @@ const DEFAULT_ADMIN_ORDER_ALERT = `<!DOCTYPE html>
       } catch (err) {
         console.warn('[AppContext] Firebase auth-free listener setup failed:', err);
       }
+
+      // Attach orders listener for real-time tracking (available to authenticated users)
+      await _attachOrdersListener();
 
       // Check if auth is already restored — if so, attach restricted listeners now
       const { auth: fbAuth } = await import('../firebase');

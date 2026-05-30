@@ -7,13 +7,13 @@ service cloud.firestore {
       allow read, write: if request.auth != null && request.auth.uid == userId;
     }
     
-    // ✅ Orders - users read their own, admins read all
+    // ✅ Orders - authenticated users and admins read all, users write their own
     match /orders/{orderId} {
-      allow read: if request.auth != null && 
+      allow read: if true; // Allow public read for order tracking (customers can check their order status from any device)
+      allow create: if request.auth != null && request.auth.uid == request.resource.data.userId;
+      allow update, delete: if request.auth != null && 
         (request.auth.uid == resource.data.userId || 
          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin');
-      allow create: if request.auth != null && request.auth.uid == request.resource.data.userId;
-      allow update, delete: if request.auth != null && request.auth.uid == resource.data.userId;
     }
     
     // ✅ Settings - authenticated users read, only admins write

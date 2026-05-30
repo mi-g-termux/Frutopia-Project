@@ -88,9 +88,9 @@ export const Navbar = ({
             <a
               href="/"
               onClick={(e) => { e.preventDefault(); setActiveCategory(null); setSearchQuery(''); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
-              className="flex items-center gap-2.5 group cursor-pointer flex-shrink-0"
+              className="flex items-center gap-3 group cursor-pointer flex-shrink-0"
             >
-              <div className="w-9 h-9 bg-emerald-50 rounded-xl flex items-center justify-center shadow-xs border border-emerald-100 group-hover:scale-105 transition-transform p-1 overflow-hidden">
+              <div className="w-11 h-11 flex items-center justify-center group-hover:scale-105 transition-transform overflow-hidden flex-shrink-0">
                 {siteSettings.logoUrl?.trim() ? (
                   <img src={siteSettings.logoUrl} alt={siteSettings.websiteName || 'Logo'} className="w-full h-full object-contain" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
                 ) : (
