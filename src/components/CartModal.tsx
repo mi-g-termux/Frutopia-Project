@@ -845,27 +845,26 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             amount: orderInfo.total,
-            currency: siteSettings?.currency || 'BDT',
             orderId: `QF-${Date.now()}`,
-            customerName: orderInfo.customerName,
-            customerEmail: orderInfo.email,
-            customerPhone: orderInfo.phone,
-            customerAddress: orderInfo.address,
-            storeId: paymentSettings.sslCommerzStoreId,
-            storePassword: paymentSettings.sslCommerzStorePassword,
-            sandboxMode: paymentSettings.sslCommerzSandboxMode ?? true,
+            productName: siteSettings?.storeName || 'Order',
+            customer: {
+              name: orderInfo.customerName,
+              email: orderInfo.email,
+              phone: orderInfo.phone,
+              address: orderInfo.address,
+            },
           }),
         });
         const sslData = await sslRes.json() as any;
-        if (!sslData.gatewayUrl) throw new Error(sslData.error || 'SSLCommerz session failed.');
+        if (!sslData.redirectUrl) throw new Error(sslData.error || 'SSLCommerz session failed.');
 
         localStorage.setItem('qf_pending_order', JSON.stringify({
           ...orderInfo,
           paymentMethod: 'SSLCommerz',
-          paymentStatus: 'Paid',
+          paymentStatus: 'Pending',
         }));
         localStorage.setItem('qf_pending_email', (orderInfo.email || '').trim().toLowerCase());
-        window.location.href = sslData.gatewayUrl;
+        window.location.href = sslData.redirectUrl;
         return;
       }
 
