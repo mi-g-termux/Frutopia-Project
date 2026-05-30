@@ -339,6 +339,7 @@ export interface UserProfile {
   name: string;
   email: string;
   phone: string;
+  phoneKey?: string;
   address: string;
   city: string;
   passwordHash?: string;

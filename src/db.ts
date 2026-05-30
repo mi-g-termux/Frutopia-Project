@@ -70,6 +70,7 @@ import {
   deleteDoc,
   query,
   where,
+  writeBatch,
 } from 'firebase/firestore';
 import type { DatabaseEngine, EngineCredentials } from './types';
 import {
@@ -1143,19 +1144,46 @@ export function setCurrentUserSession(email: string | null): void {
   else { localStorage.removeItem(CURRENT_USER_KEY); }
 }
 
+export function normalizePhoneKey(phone: string): string {
+  return (phone || '').replace(/[^\d+]/g, '').replace(/^00/, '+');
+}
+
 /**
  * Write a customer UserProfile to Firestore users/{profile.id}.
  * Also updates the localStorage cache.
- * No-ops silently if Firebase is not configured.
+ * When a phone exists, a userPhones/{phoneKey} index document is created in
+ * the same batch so Firestore rules can enforce one account per phone number.
  */
-export async function saveUserToFirestore(profile: import('./types').UserProfile): Promise<void> {
-  // Always update localStorage cache
-  saveUserProfile(profile);
-  if (!fbOk()) return;
+export async function saveUserToFirestore(profile: import('./types').UserProfile, options: { createPhoneIndex?: boolean } = {}): Promise<void> {
+  const normalizedProfile = {
+    ...profile,
+    email: profile.email.toLowerCase(),
+    phoneKey: normalizePhoneKey(profile.phone || ''),
+  } as import('./types').UserProfile;
+
+  if (!fbOk()) {
+    saveUserProfile(normalizedProfile);
+    return;
+  }
+
   try {
-    await setDoc(doc(getDb()!, 'users', profile.id), profile);
+    const database = getDb()!;
+    const batch = writeBatch(database);
+    const shouldCreatePhoneIndex = options.createPhoneIndex !== false;
+    if (normalizedProfile.phoneKey && shouldCreatePhoneIndex) {
+      batch.set(doc(database, 'userPhones', normalizedProfile.phoneKey), {
+        phoneKey: normalizedProfile.phoneKey,
+        userId: normalizedProfile.id,
+        email: normalizedProfile.email,
+        createdAt: new Date().toISOString(),
+      }, { merge: false });
+    }
+    batch.set(doc(database, 'users', normalizedProfile.id), normalizedProfile);
+    await batch.commit();
+    saveUserProfile(normalizedProfile);
   } catch (e) {
     console.warn('[db] saveUserToFirestore failed:', e);
+    throw e;
   }
 }
 
@@ -1191,6 +1219,23 @@ export async function getUserByEmailFromFirestore(email: string): Promise<import
     return null;
   } catch (e) {
     console.warn('[db] getUserByEmailFromFirestore failed:', e);
+    return null;
+  }
+}
+
+export async function getUserByPhoneFromFirestore(phone: string): Promise<import('./types').UserProfile | null> {
+  const phoneKey = normalizePhoneKey(phone);
+  if (!phoneKey || !fbOk()) return null;
+  try {
+    const q = query(collection(getDb()!, 'users'), where('phoneKey', '==', phoneKey));
+    const snap = await getDocs(q);
+    if (!snap.empty) {
+      const d = snap.docs[0];
+      return { id: d.id, ...d.data() } as import('./types').UserProfile;
+    }
+    return null;
+  } catch (e) {
+    console.warn('[db] getUserByPhoneFromFirestore failed:', e);
     return null;
   }
 }

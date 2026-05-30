@@ -100,7 +100,7 @@ interface UserAuthModalProps {
 }
 
 export const UserAuthModal = ({ isOpen, onClose, defaultTab = 'signin' }: UserAuthModalProps) => {
-  const { loginUser, loginWithGoogle, registerUser, resetUserPassword, sendPasswordOtp, verifyPasswordOtp, sendRegistrationOtp, verifyRegistrationOtp, userProfile, logoutUser, isUserLoggedIn, updateUserProfile, adminSettings, orders, siteSettings, updateOrderStatus } = useApp();
+  const { loginUser, loginWithGoogle, registerUser, resetUserPassword, sendPasswordOtp, verifyPasswordOtp, sendRegistrationOtp, verifyRegistrationOtp, userProfile, logoutUser, isUserLoggedIn, updateUserProfile, adminSettings, orders, siteSettings, updateOrderStatus, smtpSettings, emailVerificationSettings, checkPhoneAvailability } = useApp();
   const toast = useToast();
   const [tab, setTab] = useState<'signin' | 'signup' | 'profile' | 'forgot'>(isUserLoggedIn ? 'profile' : defaultTab);
   const [fpEmail, setFpEmail] = useState('');
@@ -244,43 +244,57 @@ export const UserAuthModal = ({ isOpen, onClose, defaultTab = 'signin' }: UserAu
     }
     setLoading(true);
     try {
-      const result = await loginUser(siEmail, siPass);
+      const requiresOtp = !!emailVerificationSettings?.otpSignInVerification;
+      const result = await loginUser(siEmail, siPass, requiresOtp);
       
       // NEW: Check if OTP Sign-In verification is enabled
-      if (result.success && emailVerificationSettings?.otpSignInVerification) {
+      if (result.success && requiresOtp) {
+        if (!smtpSettings?.isEnabled || !smtpSettings?.host || !smtpSettings?.email || !smtpSettings?.password) {
+          showPop('error', 'Sign-in OTP email is enabled, but SMTP is not configured in Admin → SMTP Settings.');
+          return;
+        }
+
         // Generate OTP code
         const otpCode = String(Math.floor(100000 + Math.random() * 900000));
+        const expiryMinutes = smtpSettings?.otpExpiryMinutes || 10;
+        const emailKey = siEmail.trim().toLowerCase();
+        const storeName = siteSettings?.websiteName || 'Store';
         
         // Save OTP to sessionStorage with expiry
-        sessionStorage.setItem(`signin_otp_${siEmail}`, JSON.stringify({
+        sessionStorage.setItem(`signin_otp_${emailKey}`, JSON.stringify({
           code: otpCode,
-          expiresAt: Date.now() + (emailVerificationSettings.tokenExpiryHours * 3600000),
-          email: siEmail,
+          expiresAt: Date.now() + expiryMinutes * 60_000,
+          email: emailKey,
         }));
 
-        // Send OTP email
-        try {
-          await fetch('/api/send-email', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              to: siEmail,
-              subject: 'Your Sign-In OTP Code',
-              template: 'otp-signin',
-              data: {
-                code: otpCode,
-                expiryHours: emailVerificationSettings.tokenExpiryHours,
-                storeName: siteSettings?.websiteName || 'Store',
-              },
-            }),
-          });
-        } catch (err) {
-          console.error('Failed to send OTP email:', err);
+        const otpHtml = `<div style="font-family:Arial,sans-serif;max-width:480px;margin:auto;padding:24px;background:#f8fafc;border-radius:12px;">
+          <h2 style="color:#0f172a;margin:0 0 12px;text-align:center;">Your sign-in code</h2>
+          <p style="color:#475569;font-size:14px;text-align:center;">Use this code to finish signing in to <strong>${storeName}</strong>.</p>
+          <div style="background:#fff;border:2px dashed #10b981;border-radius:10px;padding:18px;margin:18px 0;text-align:center;font-size:30px;letter-spacing:8px;font-weight:800;color:#065f46;">${otpCode}</div>
+          <p style="color:#64748b;font-size:12px;text-align:center;">This code expires in ${expiryMinutes} minutes.</p>
+        </div>`;
+
+        // Send OTP email through the admin-saved SMTP settings
+        const otpResponse = await fetch('/api/send-email', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            to: emailKey,
+            subject: `Your ${storeName} sign-in code`,
+            html: otpHtml,
+            smtpSettings: { ...smtpSettings, fromName: smtpSettings.fromName || storeName },
+          }),
+        });
+        const otpData = await otpResponse.json().catch(() => ({}));
+        if (!otpResponse.ok || otpData?.simulated) {
+          sessionStorage.removeItem(`signin_otp_${emailKey}`);
+          showPop('error', otpData?.error || 'Could not send sign-in OTP. Check SMTP settings.');
+          return;
         }
 
         // Show OTP verification screen
         setSignInOtpRequired(true);
-        setSignInOtpEmail(siEmail);
+        setSignInOtpEmail(emailKey);
         setSignInOtpCode('');
         setSignInOtpError('');
         setLoading(false);
@@ -336,7 +350,14 @@ export const UserAuthModal = ({ isOpen, onClose, defaultTab = 'signin' }: UserAu
         return;
       }
 
-      // OTP is valid - complete login
+      // OTP is valid - now open the user session
+      const loginResult = await loginUser(signInOtpEmail, siPass, false);
+      if (!loginResult.success) {
+        setSignInOtpError(loginResult.message || 'Could not complete sign in. Please try again.');
+        setSignInOtpLoading(false);
+        return;
+      }
+
       sessionStorage.removeItem(`signin_otp_${signInOtpEmail}`);
       setSignInOtpRequired(false);
       setSignInOtpEmail('');
@@ -360,28 +381,42 @@ export const UserAuthModal = ({ isOpen, onClose, defaultTab = 'signin' }: UserAu
     setSignInOtpError('');
     
     try {
+      if (!smtpSettings?.isEnabled || !smtpSettings?.host || !smtpSettings?.email || !smtpSettings?.password) {
+        setSignInOtpError('SMTP is not configured. Contact the store admin.');
+        return;
+      }
       const otpCode = String(Math.floor(100000 + Math.random() * 900000));
+      const expiryMinutes = smtpSettings?.otpExpiryMinutes || 10;
+      const storeName = siteSettings?.websiteName || 'Store';
       
       sessionStorage.setItem(`signin_otp_${signInOtpEmail}`, JSON.stringify({
         code: otpCode,
-        expiresAt: Date.now() + ((emailVerificationSettings?.tokenExpiryHours || 24) * 3600000),
+        expiresAt: Date.now() + expiryMinutes * 60_000,
         email: signInOtpEmail,
       }));
 
-      await fetch('/api/send-email', {
+      const otpHtml = `<div style="font-family:Arial,sans-serif;max-width:480px;margin:auto;padding:24px;background:#f8fafc;border-radius:12px;">
+        <h2 style="color:#0f172a;margin:0 0 12px;text-align:center;">Your sign-in code</h2>
+        <p style="color:#475569;font-size:14px;text-align:center;">Use this code to finish signing in to <strong>${storeName}</strong>.</p>
+        <div style="background:#fff;border:2px dashed #10b981;border-radius:10px;padding:18px;margin:18px 0;text-align:center;font-size:30px;letter-spacing:8px;font-weight:800;color:#065f46;">${otpCode}</div>
+        <p style="color:#64748b;font-size:12px;text-align:center;">This code expires in ${expiryMinutes} minutes.</p>
+      </div>`;
+
+      const resendResponse = await fetch('/api/send-email', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           to: signInOtpEmail,
-          subject: 'Your Sign-In OTP Code',
-          template: 'otp-signin',
-          data: {
-            code: otpCode,
-            expiryHours: emailVerificationSettings?.tokenExpiryHours || 24,
-            storeName: siteSettings?.websiteName || 'Store',
-          },
+          subject: `Your ${storeName} sign-in code`,
+          html: otpHtml,
+          smtpSettings: { ...smtpSettings, fromName: smtpSettings.fromName || storeName },
         }),
-      }).catch(err => console.error('Resend OTP error:', err));
+      });
+      const resendData = await resendResponse.json().catch(() => ({}));
+      if (!resendResponse.ok || resendData?.simulated) {
+        setSignInOtpError(resendData?.error || 'Could not resend OTP. Check SMTP settings.');
+        return;
+      }
 
       showPop('success', 'OTP resent to your email.');
     } catch (err) {
@@ -479,9 +514,15 @@ export const UserAuthModal = ({ isOpen, onClose, defaultTab = 'signin' }: UserAu
     }
     setLoading(true);
     try {
+      const fullPhone = joinPhone(suDialCode, suPhone);
+      const phoneCheck = await checkPhoneAvailability(fullPhone);
+      if (!phoneCheck.available) {
+        showPop('error', phoneCheck.message);
+        return;
+      }
       const result = await sendRegistrationOtp(suEmail, suName);
       if (result.success) {
-        setRegPendingData({ name: suName, email: suEmail, phone: joinPhone(suDialCode, suPhone), address: suAddress, city: suCity, pass: suPass });
+        setRegPendingData({ name: suName, email: suEmail, phone: fullPhone, address: suAddress, city: suCity, pass: suPass });
         setRegStep('otp');
         setRegOtp('');
         // Start resend countdown
@@ -901,7 +942,7 @@ export const UserAuthModal = ({ isOpen, onClose, defaultTab = 'signin' }: UserAu
             {regStep === 'otp' && regPendingData && (
               <div className="space-y-4">
                 <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-center space-y-1">
-                  <div className="text-2xl">📧</div>
+                  <Mail className="w-6 h-6 text-emerald-600 mx-auto" />
                   <p className="text-sm font-bold text-slate-700">Check your inbox!</p>
                   <p className="text-xs text-slate-500">We sent a 6-digit code to <span className="font-mono font-bold text-emerald-700">{regPendingData.email}</span></p>
                 </div>
@@ -924,8 +965,8 @@ export const UserAuthModal = ({ isOpen, onClose, defaultTab = 'signin' }: UserAu
                   disabled={loading || regOtp.length < 6}
                   className="w-full py-3 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white font-bold rounded-xl text-sm shadow-sm transition-all disabled:opacity-60 flex items-center justify-center gap-2"
                 >
-                  {loading ? <span className="w-4 h-4 border-2 border-white/50 border-t-white rounded-full animate-spin" /> : null}
-                  {loading ? 'Verifying...' : '✅ Verify & Create Account'}
+                  {loading ? <span className="w-4 h-4 border-2 border-white/50 border-t-white rounded-full animate-spin" /> : <CheckCircle className="w-4 h-4" />}
+                  {loading ? 'Verifying...' : 'Verify & Create Account'}
                 </button>
                 <div className="flex items-center justify-between">
                   <button type="button" onClick={() => { setRegStep('form'); setRegOtp(''); }} className="text-xs text-slate-500 hover:text-slate-700 underline">

@@ -11,12 +11,37 @@ service cloud.firestore {
     }
 
     function isValidEmail(s) {
-      return s is string && s.size() <= 254 && s.matches('^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$');
+      return s is string && s.size() <= 254 && s.matches('^[^@\s]+@[^@\s]+\.[^@\s]+$');
+    }
+
+    function isValidPhoneKey(s) {
+      return s is string && s.size() >= 8 && s.size() <= 20 && s.matches('^\+?[0-9]{8,20}$');
     }
 
     function notYetInstalled() {
       return !exists(/databases/$(database)/documents/settings/install_status)
           || get(/databases/$(database)/documents/settings/install_status).data.installed != true;
+    }
+
+    function validUserCreate(userId) {
+      return request.resource.data.id == userId
+          && isValidEmail(request.resource.data.email)
+          && request.resource.data.name is string
+          && request.resource.data.name.size() > 0
+          && request.resource.data.name.size() <= 100
+          && request.resource.data.phone is string
+          && request.resource.data.phoneKey is string
+          && isValidPhoneKey(request.resource.data.phoneKey)
+          && request.resource.data.address is string
+          && request.resource.data.address.size() <= 500
+          && request.resource.data.city is string
+          && request.resource.data.city.size() <= 100
+          && request.resource.data.passwordHash is string
+          && request.resource.data.passwordHash.size() > 0
+          && request.resource.data.passwordHash.size() <= 128
+          && existsAfter(/databases/$(database)/documents/userPhones/$(request.resource.data.phoneKey))
+          && getAfter(/databases/$(database)/documents/userPhones/$(request.resource.data.phoneKey)).data.userId == userId
+          && !exists(/databases/$(database)/documents/userPhones/$(request.resource.data.phoneKey));
     }
 
     match /settings/install_status {
@@ -62,8 +87,6 @@ service cloud.firestore {
     }
 
     match /orders/{id} {
-      // ✅ Public read: anyone can get or list orders for cross-device order tracking
-      // Customers need to look up their order by orderNumber from any device/phone
       allow get, list: if true;
       allow create: if request.resource.data.customerName is string
                     && request.resource.data.customerName.size() > 0
@@ -78,7 +101,6 @@ service cloud.firestore {
                         || isValidEmail(request.resource.data.email))
                     && (!('status' in request.resource.data)
                         || request.resource.data.status == 'pending');
-      // Only admin can update (change status) or delete orders
       allow update, delete: if isAdmin();
     }
 
@@ -88,18 +110,21 @@ service cloud.firestore {
       allow read, update, delete: if isAdmin();
     }
 
+    match /userPhones/{phoneId} {
+      allow read: if false;
+      allow create: if request.resource.data.phoneKey == phoneId
+                    && isValidPhoneKey(phoneId)
+                    && request.resource.data.userId is string
+                    && request.resource.data.email is string
+                    && !exists(/databases/$(database)/documents/userPhones/$(phoneId));
+      allow update, delete: if isAdmin();
+    }
+
     match /users/{userId} {
-      // ✅ FIXED: Allow unauthenticated users to query/list the users collection
-      // to find accounts by email (for login functionality).
-      // This is safe because:
-      // 1. Email addresses are meant to be lookup keys for authentication
-      // 2. No sensitive data beyond email is exposed
-      // 3. Password hash is checked server-side
-      // 4. This only allows reading user documents, not writing
       allow list: if true;
-      
-      // Individual document read/write rules stay as before
-      allow read, write: if isAdmin()
+      allow get: if true;
+      allow create: if validUserCreate(userId) || isAdmin();
+      allow update, delete: if isAdmin()
         || (isSignedIn() && request.auth.uid == userId);
     }
 

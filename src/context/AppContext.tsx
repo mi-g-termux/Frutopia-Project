@@ -99,6 +99,8 @@ import {
   onEngineChange,
   saveUserToFirestore,
   getUserByEmailFromFirestore,
+  getUserByPhoneFromFirestore,
+  normalizePhoneKey,
 } from '../db';
 import {
   reinitializeDynamicFirebase,
@@ -258,7 +260,7 @@ interface AppContextType {
   // User auth
   userProfile: UserProfile | null;
   isUserLoggedIn: boolean;
-  loginUser: (email: string, password: string) => Promise<{ success: boolean; message: string }>;
+  loginUser: (email: string, password: string, deferSession?: boolean) => Promise<{ success: boolean; message: string }>;
   loginWithGoogle: () => Promise<{ success: boolean; message: string }>;
   registerUser: (profile: UserProfile, password: string) => Promise<{ success: boolean; message: string }>;
   resetUserPassword: (email: string, newPassword: string) => Promise<{ success: boolean; message: string }>;
@@ -266,6 +268,7 @@ interface AppContextType {
   verifyPasswordOtp: (email: string, otp: string) => { success: boolean; message: string };
   logoutUser: () => void;
   updateUserProfile: (profile: UserProfile) => Promise<void>;
+  checkPhoneAvailability: (phone: string, currentUserId?: string) => Promise<{ available: boolean; message: string }>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -1090,7 +1093,32 @@ const DEFAULT_ADMIN_ORDER_ALERT = `<!DOCTYPE html>
     setCurrentUserEmailState(normalized);
   };
 
-  const loginUser = async (email: string, password: string): Promise<{ success: boolean; message: string }> => {
+  const findProfileByPhone = async (phone: string): Promise<UserProfile | null> => {
+    const phoneKey = normalizePhoneKey(phone);
+    if (!phoneKey) return null;
+
+    try {
+      const firestoreProfile = await getUserByPhoneFromFirestore(phoneKey);
+      if (firestoreProfile) return firestoreProfile;
+    } catch (err) {
+      console.warn('[findProfileByPhone] Firestore phone lookup failed:', err);
+    }
+
+    const profiles = getUserProfiles();
+    return Object.values(profiles).find((p) => normalizePhoneKey(p.phone || '') === phoneKey) || null;
+  };
+
+  const checkPhoneAvailability = async (phone: string, currentUserId?: string): Promise<{ available: boolean; message: string }> => {
+    const phoneKey = normalizePhoneKey(phone);
+    if (!phoneKey) return { available: true, message: 'No phone number supplied.' };
+    const existing = await findProfileByPhone(phoneKey);
+    if (existing && existing.id !== currentUserId) {
+      return { available: false, message: 'This phone number is already linked to another account. Please sign in or use a different number.' };
+    }
+    return { available: true, message: 'Phone number is available.' };
+  };
+
+  const loginUser = async (email: string, password: string, deferSession = false): Promise<{ success: boolean; message: string }> => {
     try {
       const emailLower = email.trim().toLowerCase();
       const hash = simpleHash(password);
@@ -1111,11 +1139,13 @@ const DEFAULT_ADMIN_ORDER_ALERT = `<!DOCTYPE html>
           if (firestoreProfile.passwordHash !== hash) {
             return { success: false, message: 'Incorrect password.' };
           }
-          // ✅ Update localStorage cache on successful Firestore login
-          saveUserProfile(firestoreProfile);
-          setCurrentUserSession(emailLower);
-          setUserProfileState(firestoreProfile);
-          setCurrentUserEmail(emailLower);
+          if (!deferSession) {
+            // ✅ Update localStorage cache on successful Firestore login
+            saveUserProfile(firestoreProfile);
+            setCurrentUserSession(emailLower);
+            setUserProfileState(firestoreProfile);
+            setCurrentUserEmail(emailLower);
+          }
           console.log('[loginUser] ✅ Login successful from Firestore');
           return { success: true, message: 'Welcome back, ' + firestoreProfile.name + '!' };
         }
@@ -1137,9 +1167,11 @@ const DEFAULT_ADMIN_ORDER_ALERT = `<!DOCTYPE html>
         return { success: false, message: 'Incorrect password.' };
       }
       
-      setCurrentUserSession(emailLower);
-      setUserProfileState(profile);
-      setCurrentUserEmail(emailLower);
+      if (!deferSession) {
+        setCurrentUserSession(emailLower);
+        setUserProfileState(profile);
+        setCurrentUserEmail(emailLower);
+      }
       console.log('[loginUser] ✅ Login successful from localStorage');
       return { success: true, message: 'Welcome back, ' + profile.name + '!' };
     } catch (err: any) {
@@ -1219,7 +1251,7 @@ const DEFAULT_ADMIN_ORDER_ALERT = `<!DOCTYPE html>
         
         // ✅ Update in Firestore
         try {
-          await saveUserToFirestore(merged);
+          await saveUserToFirestore(merged, { createPhoneIndex: false });
           console.log('[loginWithGoogle] ✅ Updated existing account in Firestore');
         } catch (fbError) {
           console.warn('[loginWithGoogle] Failed to update Firestore:', fbError);
@@ -1284,8 +1316,17 @@ const DEFAULT_ADMIN_ORDER_ALERT = `<!DOCTYPE html>
       // ✅ Check for existing accounts
       const profiles = getUserProfiles();
       const emailLower = profile.email.toLowerCase();
-      if (profiles[emailLower]) {
+      if (profiles[emailLower] || await getUserByEmailFromFirestore(emailLower)) {
         return { success: false, message: 'An account already exists with this email.' };
+      }
+
+      const phoneKey = normalizePhoneKey(profile.phone || '');
+      if (!phoneKey) {
+        return { success: false, message: 'Phone number is required.' };
+      }
+      const phoneCheck = await checkPhoneAvailability(phoneKey);
+      if (!phoneCheck.available) {
+        return { success: false, message: phoneCheck.message };
       }
 
       // ✅ CRITICAL: Generate ID and hash password IMMEDIATELY
@@ -1304,6 +1345,7 @@ const DEFAULT_ADMIN_ORDER_ALERT = `<!DOCTYPE html>
         name: profile.name,
         email: emailLower,
         phone: profile.phone || '',
+        phoneKey,
         address: profile.address || '',
         city: profile.city || '',
         passwordHash: passwordHash, // ✅ ALWAYS SET, NEVER EMPTY OR UNDEFINED
@@ -1408,7 +1450,7 @@ const DEFAULT_ADMIN_ORDER_ALERT = `<!DOCTYPE html>
         if (firestoreProfile) {
           const updatedProfile = { ...firestoreProfile, passwordHash: newHash }; // ✅ ALWAYS SET
           
-          await saveUserToFirestore(updatedProfile);
+          await saveUserToFirestore(updatedProfile, { createPhoneIndex: false });
           console.log('[resetUserPassword] ✅ Password updated in Firestore');
           
           if (userProfile?.email?.toLowerCase() === key) {
@@ -1457,8 +1499,10 @@ const DEFAULT_ADMIN_ORDER_ALERT = `<!DOCTYPE html>
   };
 
   const updateUserProfile = async (profile: UserProfile) => {
-    await saveUserToFirestore(profile); // writes to Firestore + localStorage cache
-    setUserProfileState(profile);
+    const phoneCheck = await checkPhoneAvailability(profile.phone || '', profile.id);
+    if (!phoneCheck.available) throw new Error(phoneCheck.message);
+    await saveUserToFirestore({ ...profile, phoneKey: normalizePhoneKey(profile.phone || '') }, { createPhoneIndex: false }); // writes to Firestore + localStorage cache
+    setUserProfileState({ ...profile, phoneKey: normalizePhoneKey(profile.phone || '') });
   };
 
   // ── OTP store (localStorage-backed) ────────────────────────────────────────
@@ -1829,12 +1873,16 @@ const DEFAULT_ADMIN_ORDER_ALERT = `<!DOCTYPE html>
       id: Date.now().toString(36),
       name: data.name,
       email: key,
-      phone: data.phone || '',
+      // Guest checkout phone numbers are delivery-only. Do not attach them to
+      // auto-created accounts, otherwise a delivery number could block the real
+      // owner from registering later.
+      phone: '',
+      phoneKey: '',
       address: data.address || '',
       city: data.city || '',
       passwordHash: '', // null/empty password — user will set one via OTP link
     };
-    await saveUserToFirestore(newProfile);
+    await saveUserToFirestore(newProfile, { createPhoneIndex: false });
     setCurrentUserSession(newProfile.email);
     setUserProfileState(newProfile);
     setCurrentUserEmail(newProfile.email);
@@ -2614,7 +2662,7 @@ const DEFAULT_ADMIN_ORDER_ALERT = `<!DOCTYPE html>
         userProfile,
         isUserLoggedIn: !!userProfile,
         loginUser, loginWithGoogle, registerUser, resetUserPassword,
-        sendPasswordOtp, verifyPasswordOtp, logoutUser, updateUserProfile,
+        sendPasswordOtp, verifyPasswordOtp, logoutUser, updateUserProfile, checkPhoneAvailability,
         deliveryZones, getZoneForCity, saveDeliveryZonesCtx,
       }}
     >
