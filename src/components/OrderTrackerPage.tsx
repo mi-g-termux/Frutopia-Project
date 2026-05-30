@@ -6,7 +6,7 @@
 import React, { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { Order, OrderStatus } from '../types';
-import { Search, Package, CheckCircle, Truck, Clock, XCircle, RefreshCw, ArrowLeft, MapPin, Phone, Mail, ShoppingBag, CreditCard, ChevronRight, RotateCcw } from 'lucide-react';
+import { Search, Package, CheckCircle, Truck, Clock, XCircle, RefreshCw, ArrowLeft, MapPin, Phone, Mail, ShoppingBag, CreditCard, ChevronRight, RotateCcw, Loader2 } from 'lucide-react';
 
 interface OrderTrackerPageProps {
   initialOrderNumber?: string;
@@ -200,29 +200,90 @@ export const OrderTrackerPage = ({ initialOrderNumber }: OrderTrackerPageProps) 
   const [searched, setSearched] = useState(!!initialOrderNumber);
   const [results, setResults] = useState<Order[]>([]);
   const [notFound, setNotFound] = useState(false);
+  const [isSearching, setIsSearching] = useState(false);
 
   const currency = siteSettings?.currency || 'USD';
   const currencySymbol = siteSettings?.currencySymbol || '$';
   const currencyPosition = (siteSettings?.currencyPosition || 'before') as 'before' | 'after';
+
+  /**
+   * Search strategy:
+   * 1. Query Firestore directly using 'orderNumber' field (works for everyone because rules allow `list` for orders).
+   * 2. Also try fetching by document ID directly (`allow get: if true`).
+   * 3. Fall back to the local `orders` array (available to admins only).
+   * This ensures any user on any device can track their order by order number.
+   */
+  const handleSearch = async (overrideQuery?: string) => {
+    const q = (overrideQuery ?? query).trim().toUpperCase();
+    if (!q) return;
+    setSearched(true);
+    setIsSearching(true);
+    setResults([]);
+    setNotFound(false);
+
+    try {
+      // ── Try Firestore directly first ──────────────────────────────────────
+      const { getIsFirebaseConfigured } = await import('../firebase');
+      if (getIsFirebaseConfigured()) {
+        const { db } = await import('../firebase');
+        if (db) {
+          const { collection, query: fbQuery, where, getDocs, doc, getDoc } = await import('firebase/firestore');
+          const found: Order[] = [];
+
+          // 1. Query by orderNumber field (case-insensitive match)
+          try {
+            // Try exact match first
+            const snap = await getDocs(fbQuery(collection(db, 'orders'), where('orderNumber', '==', q)));
+            snap.forEach(d => found.push({ id: d.id, ...d.data() } as Order));
+
+            // Also try original case in case user typed lowercase
+            if (found.length === 0 && overrideQuery !== q) {
+              const snap2 = await getDocs(fbQuery(collection(db, 'orders'), where('orderNumber', '==', overrideQuery ?? query)));
+              snap2.forEach(d => {
+                if (!found.find(o => o.id === d.id)) found.push({ id: d.id, ...d.data() } as Order);
+              });
+            }
+          } catch (listErr) {
+            console.warn('[OrderTracker] Firestore list query failed (rules?):', listErr);
+          }
+
+          // 2. Try fetching by document ID directly (allowed by `allow get: if true`)
+          if (found.length === 0) {
+            try {
+              const directSnap = await getDoc(doc(db, 'orders', q));
+              if (directSnap.exists()) found.push({ id: directSnap.id, ...directSnap.data() } as Order);
+            } catch { /* not a valid doc ID */ }
+          }
+
+          if (found.length > 0) {
+            setResults(found);
+            setNotFound(false);
+            setIsSearching(false);
+            return;
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[OrderTracker] Firebase query failed, falling back to local orders:', err);
+    }
+
+    // ── Fall back to local orders array (populated for admins) ──────────────
+    const localFound = orders.filter(o =>
+      o.orderNumber.toUpperCase().includes(q) ||
+      o.id.toLowerCase().includes(q.toLowerCase())
+    );
+    setResults(localFound);
+    setNotFound(localFound.length === 0);
+    setIsSearching(false);
+  };
 
   // Auto-search if order number provided via URL
   useEffect(() => {
     if (initialOrderNumber) {
       handleSearch(initialOrderNumber);
     }
-  }, [initialOrderNumber, orders]);
-
-  const handleSearch = (overrideQuery?: string) => {
-    const q = (overrideQuery ?? query).trim().toUpperCase();
-    if (!q) return;
-    setSearched(true);
-    const found = orders.filter(o =>
-      o.orderNumber.toUpperCase().includes(q) ||
-      o.id.toLowerCase().includes(q.toLowerCase())
-    );
-    setResults(found);
-    setNotFound(found.length === 0);
-  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialOrderNumber]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') handleSearch();
@@ -275,12 +336,14 @@ export const OrderTrackerPage = ({ initialOrderNumber }: OrderTrackerPageProps) 
             </div>
             <button
               onClick={() => handleSearch()}
-              className="px-5 py-2.5 bg-gradient-to-r from-violet-600 to-indigo-600 text-white text-sm font-bold rounded-xl shadow-sm hover:from-violet-700 hover:to-indigo-700 transition-all cursor-pointer flex items-center gap-2"
+              disabled={isSearching}
+              className="px-5 py-2.5 bg-gradient-to-r from-violet-600 to-indigo-600 text-white text-sm font-bold rounded-xl shadow-sm hover:from-violet-700 hover:to-indigo-700 transition-all cursor-pointer flex items-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
             >
-              <Search size={14} /> Track
+              {isSearching ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
+              {isSearching ? 'Searching...' : 'Track'}
             </button>
           </div>
-          {searched && (
+          {searched && !isSearching && (
             <button
               onClick={() => { setQuery(''); setSearched(false); setResults([]); setNotFound(false); }}
               className="mt-2 text-[10px] text-slate-400 hover:text-slate-600 flex items-center gap-1 cursor-pointer"
@@ -293,7 +356,12 @@ export const OrderTrackerPage = ({ initialOrderNumber }: OrderTrackerPageProps) 
         {/* Results */}
         {searched && (
           <div className="space-y-4">
-            {notFound ? (
+            {isSearching ? (
+              <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-10 text-center space-y-3">
+                <Loader2 size={28} className="animate-spin text-violet-500 mx-auto" />
+                <p className="text-sm font-semibold text-slate-500">Looking up your order...</p>
+              </div>
+            ) : notFound ? (
               <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-10 text-center space-y-3">
                 <div className="w-14 h-14 rounded-2xl bg-rose-50 flex items-center justify-center mx-auto">
                   <XCircle size={24} className="text-rose-400" />
