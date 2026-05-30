@@ -1194,16 +1194,45 @@ const DEFAULT_ADMIN_ORDER_ALERT = `<!DOCTYPE html>
   };
 
   const resetUserPassword = async (email: string, newPassword: string): Promise<{ success: boolean; message: string }> => {
-    const profiles = getUserProfiles();
     const key = email.trim().toLowerCase();
-    const profile = profiles[key];
-    if (!profile) return { success: false, message: 'No account found with this email.' };
-    if (newPassword.length < 6) return { success: false, message: 'Password must be at least 6 characters.' };
-    const updated = { ...profile, passwordHash: simpleHash(newPassword) };
-    await saveUserToFirestore(updated);
-    if (userProfile?.email?.toLowerCase() === key) setUserProfileState(updated);
+    
+    if (!newPassword || newPassword.length < 6) {
+      return { success: false, message: 'Password must be at least 6 characters.' };
+    }
+    
+    // ✅ FIXED: Try Firestore FIRST (source of truth)
+    let updated = false;
+    try {
+      const firestoreProfile = await getUserByEmailFromFirestore(email);
+      if (firestoreProfile) {
+        const newHash = simpleHash(newPassword);
+        const updatedProfile = { ...firestoreProfile, passwordHash: newHash };
+        
+        await saveUserToFirestore(updatedProfile);
+        if (userProfile?.email?.toLowerCase() === key) setUserProfileState(updatedProfile);
+        updated = true;
+      }
+    } catch (firebaseErr) {
+      console.warn('[Auth] Firestore update failed, trying localStorage:', firebaseErr);
+    }
+    
+    // ✅ Fall back to localStorage if Firestore unavailable
+    if (!updated) {
+      const profiles = getUserProfiles();
+      const profile = profiles[key];
+      if (profile) {
+        const newHash = simpleHash(newPassword);
+        const updatedProfile = { ...profile, passwordHash: newHash };
+        
+        saveUserProfile(updatedProfile);
+        if (userProfile?.email?.toLowerCase() === key) setUserProfileState(updatedProfile);
+        updated = true;
+      }
+    }
+    
+    if (!updated) return { success: false, message: 'No account found with this email.' };
     deleteOtpEntry(key);
-    return { success: true, message: 'Password reset successfully!' };
+    return { success: true, message: 'Password reset successfully! You can now login with your new password.' };
   };
 
   const logoutUser = () => {
@@ -1239,22 +1268,57 @@ const DEFAULT_ADMIN_ORDER_ALERT = `<!DOCTYPE html>
   };
 
   const sendPasswordOtp = async (email: string): Promise<{ success: boolean; message: string }> => {
-    const profiles = getUserProfiles();
     const key = email.trim().toLowerCase();
-    if (!profiles[key]) return { success: false, message: 'No account found with this email.' };
+    
+    // ✅ FIXED: Try Firestore FIRST (source of truth)
+    let userExists = false;
+    try {
+      const firestoreProfile = await getUserByEmailFromFirestore(email);
+      if (firestoreProfile) {
+        userExists = true;
+      }
+    } catch (firebaseErr) {
+      console.warn('[Auth] Firestore query failed, checking localStorage:', firebaseErr);
+    }
+    
+    // ✅ Fall back to localStorage if Firestore unavailable
+    if (!userExists) {
+      const profiles = getUserProfiles();
+      if (profiles[key]) {
+        userExists = true;
+      }
+    }
+    
+    if (!userExists) return { success: false, message: 'No account found with this email. Please register first.' };
     if (smtpSettings?.otpEnabled === false) return { success: false, message: 'OTP password reset is disabled.' };
+    
     const code = String(Math.floor(100000 + Math.random() * 900000));
     const expiryMinutes = smtpSettings?.otpExpiryMinutes || 10;
     setOtpEntry(key, { code, expiresAt: Date.now() + expiryMinutes * 60_000 });
-    const storeName = siteSettings?.websiteName || 'E-Shop';
+    const storeName = siteSettings?.websiteName || 'Fruitopia';
+    
     try {
+      const otpHtml = (
+        smtpSettings?.otpTemplate ||
+        `<div style="font-family:sans-serif;max-width:480px;margin:auto;padding:24px;background:#f8fafc;border-radius:12px;">
+          <div style="text-align:center;font-size:48px;margin-bottom:12px;">🔐</div>
+          <h2 style="color:#0f172a;text-align:center;margin:0;">Password Reset OTP</h2>
+          <p style="color:#64748b;text-align:center;font-size:14px;margin:12px 0;">Your password reset code is:</p>
+          <div style="background:#fff;border:2px solid #e2e8f0;border-radius:10px;padding:20px;margin:20px 0;text-align:center;">
+            <p style="font-size:32px;font-weight:bold;color:#059669;margin:16px 0;letter-spacing:4px;font-family:monospace;">${code}</p>
+            <p style="color:#475569;font-size:12px;margin:0;">Valid for ${expiryMinutes} minutes only</p>
+          </div>
+          <p style="color:#64748b;font-size:12px;margin:12px 0;">If you didn't request this, please ignore this email.</p>
+        </div>`
+      );
+      
       await fetch('/api/send-email', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           to: email,
-          subject: smtpSettings?.otpSubject || `Your ${storeName} Password Reset OTP`,
-          html: `<p>Your OTP is: <strong>${code}</strong>. Valid for ${expiryMinutes} minutes.</p>`,
+          subject: smtpSettings?.otpSubject || `Your ${storeName} Password Reset Code`,
+          html: otpHtml,
           smtpSettings: smtpSettings ? { ...smtpSettings, fromName: smtpSettings.fromName || storeName } : null,
         }),
       });
