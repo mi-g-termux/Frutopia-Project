@@ -32,7 +32,7 @@ function AppContent() {
   const [isCartOpen, setIsCartOpen]               = useState(false);
   const [searchQuery, setSearchQuery]             = useState('');
   const [activeCategory, setActiveCategory]       = useState<string | null>(null);
-  const [emailBannerDismissed, setEmailBannerDismissed] = useState(false);
+  // ❌ REMOVED: emailBannerDismissed - no longer needed (banner removed)
 
   // ── INSTALL GATE ──────────────────────────────────────────────────────────
   // Runs once on mount. Decides whether to show InstallWizard or the app.
@@ -209,40 +209,12 @@ function AppContent() {
     return <OrderTrackerPage initialOrderNumber={orderNum} />;
   }
 
-  // Email verification banner
-  const showEmailBanner =
-    isUserLoggedIn &&
-    emailVerificationSettings?.isEnabled &&
-    !isEmailVerified(userProfile?.email || '') &&
-    !emailBannerDismissed;
+  // ❌ REMOVED: Email verification banner - OTP verification during signup already handles email verification
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col justify-between selection:bg-[#ff5c35] selection:text-white">
 
-      {/* Email verification banner */}
-      {showEmailBanner && (
-        <div className="bg-amber-400 text-amber-900 px-4 py-2.5 flex items-center justify-between gap-3 text-sm font-semibold z-50 sticky top-0">
-          <span className="flex items-center gap-2 flex-wrap">
-            <span>📧</span>
-            <span>Please verify your email. Check your inbox for a verification link.</span>
-            <button
-              onClick={async () => {
-                await sendEmailVerification(userProfile?.email || '');
-                toast.success('Verification email resent!');
-              }}
-              className="underline text-amber-900 hover:text-amber-950 font-bold"
-            >
-              Resend verification email
-            </button>
-          </span>
-          <button
-            onClick={() => setEmailBannerDismissed(true)}
-            className="text-amber-900 hover:text-amber-950 font-black text-xl leading-none flex-shrink-0"
-          >
-            ×
-          </button>
-        </div>
-      )}
+      {/* ❌ REMOVED: Email verification banner (redundant - OTP verification already handles this) */}
 
       <Navbar
         onCartToggle={() => setIsCartOpen(!isCartOpen)}
