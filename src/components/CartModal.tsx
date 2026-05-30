@@ -1312,7 +1312,7 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
                       </div>
                     )}
                     <p className="text-[10px] text-indigo-700/80 mt-2">
-                      We'll email a 6-digit code to verify it's you. No mailbox round-trip needed.
+                      We'll email a 6-digit code to verify it's you.
                     </p>
                   </div>
                 )}

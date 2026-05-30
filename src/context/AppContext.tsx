@@ -1316,28 +1316,51 @@ const DEFAULT_ADMIN_ORDER_ALERT = `<!DOCTYPE html>
     if (!key || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(key)) {
       return { success: false, message: 'Please enter a valid email address first.' };
     }
+    // Use the same admin-configured SMTP pipeline as every other email
+    // (welcome, order confirmation, password OTP). If SMTP isn't set,
+    // surface that to the user instead of silently "succeeding".
+    if (!smtpSettings || !smtpSettings.host || !smtpSettings.email) {
+      return { success: false, message: 'Email service is not configured. Please contact the store admin.' };
+    }
+    if (smtpSettings.otpEnabled === false) {
+      return { success: false, message: 'Email OTP verification is disabled by admin.' };
+    }
     const code = String(Math.floor(100000 + Math.random() * 900000));
     const expiryMinutes = smtpSettings?.otpExpiryMinutes || 10;
     setCheckoutOtpEntry(key, { code, expiresAt: Date.now() + expiryMinutes * 60_000 });
     const storeName = siteSettings?.websiteName || 'E-Shop';
+    const subject = smtpSettings?.otpSubject
+      ? `${smtpSettings.otpSubject} (Checkout)`
+      : `Your ${storeName} checkout verification code`;
+    const html = `<div style="font-family:Arial,sans-serif;max-width:480px;margin:auto;padding:24px;background:#f8fafc;border-radius:12px;">
+        <h2 style="color:#0f172a;margin:0 0 12px;">Verify your email to complete checkout</h2>
+        <p style="color:#475569;font-size:14px;">Use the code below to verify your email and place your order at <strong>${storeName}</strong>.</p>
+        <div style="background:#fff;border:2px dashed #10b981;border-radius:10px;padding:18px;margin:18px 0;text-align:center;font-size:30px;letter-spacing:8px;font-weight:800;color:#065f46;">${code}</div>
+        <p style="color:#64748b;font-size:12px;">This code expires in ${expiryMinutes} minutes. If you did not request this, you can safely ignore this email.</p>
+      </div>`;
     try {
-      await fetch('/api/send-email', {
+      const res = await fetch('/api/send-email', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           to: email,
-          subject: `Your ${storeName} checkout verification code`,
-          html: `<div style="font-family:sans-serif;max-width:480px;margin:auto;padding:24px;background:#f8fafc;border-radius:12px;">
-            <h2 style="color:#0f172a;margin:0 0 12px;">Verify your email to complete checkout</h2>
-            <p style="color:#475569;font-size:14px;">Use the code below to verify your email and place your order at <strong>${storeName}</strong>.</p>
-            <div style="background:#fff;border:2px dashed #10b981;border-radius:10px;padding:18px;margin:18px 0;text-align:center;font-size:30px;letter-spacing:8px;font-weight:800;color:#065f46;">${code}</div>
-            <p style="color:#64748b;font-size:12px;">This code expires in ${expiryMinutes} minutes. If you did not request this, you can safely ignore this email.</p>
-          </div>`,
-          smtpSettings: smtpSettings ? { ...smtpSettings, fromName: smtpSettings.fromName || storeName } : null,
+          subject,
+          html,
+          smtpSettings: { ...smtpSettings, fromName: smtpSettings.fromName || storeName },
         }),
       });
-    } catch { console.log(`[CHECKOUT OTP DEV] Code for ${email}: ${code}`); }
-    return { success: true, message: `Verification code sent to ${email}.` };
+      if (!res.ok) {
+        const errTxt = await res.text().catch(() => '');
+        console.error('[CHECKOUT OTP] send-email failed', res.status, errTxt);
+        console.log(`[CHECKOUT OTP DEV] Code for ${email}: ${code}`);
+        return { success: false, message: `Could not send code (server ${res.status}). Please try again.` };
+      }
+    } catch (e) {
+      console.error('[CHECKOUT OTP] network error', e);
+      console.log(`[CHECKOUT OTP DEV] Code for ${email}: ${code}`);
+      return { success: false, message: 'Could not reach email server. Please try again.' };
+    }
+    return { success: true, message: `Verification code sent to ${email}. Check your inbox.` };
   };
 
   const verifyCheckoutEmailOtp = (email: string, otp: string): { success: boolean; message: string } => {
