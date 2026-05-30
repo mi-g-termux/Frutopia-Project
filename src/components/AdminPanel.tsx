@@ -450,6 +450,8 @@ export const AdminPanel: React.FC = () => {
  // --- GOOGLE SIGN-IN SETTINGS ---
  const [googleSignInEnabled, setGoogleSignInEnabled] = useState(adminSettings.googleSignInEnabled ?? false);
  const [googleClientId, setGoogleClientId] = useState(adminSettings.googleClientId ||'');
+ const [recaptchaEnabled, setRecaptchaEnabled] = useState(adminSettings.recaptchaEnabled ?? false);
+ const [recaptchaSiteKey, setRecaptchaSiteKey] = useState(adminSettings.recaptchaSiteKey || '');
 
  const handleAdminVerify = (e: React.FormEvent) => {
  e.preventDefault();
@@ -1070,6 +1072,8 @@ await saveSiteSettings(JSON.parse(JSON.stringify(current)));
  password: simpleHash(secPass.trim()),
  googleSignInEnabled,
  googleClientId: googleClientId.trim(),
+ recaptchaEnabled,
+ recaptchaSiteKey: recaptchaSiteKey.trim(),
  };
  await saveAdminSettings(current);
  showSavedBanner('security');
@@ -2610,7 +2614,43 @@ await saveSiteSettings(JSON.parse(JSON.stringify(current)));
  </div> <div className="pt-3 border-t border-slate-100"> <button
  onClick={handleSaveSecurityCMS}
  className="w-full sm:w-auto cursor-pointer flex items-center justify-center gap-1.5 px-6 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-sans font-semibold uppercase text-xs shadow-sm rounded-lg transition-colors"
- > <KeyRound className="w-4 h-4" /> <span>Reset Secure Keys</span> </button> </div> </div> )}
+ > <KeyRound className="w-4 h-4" /> <span>Reset Secure Keys</span> </button> </div>
+
+ {/* reCAPTCHA Configuration */}
+ <div className="pt-4 border-t border-slate-100">
+   <h4 className="text-xs font-bold uppercase text-slate-400 mb-3">🤖 reCAPTCHA (Bot Protection)</h4>
+   <div className="bg-yellow-50 border border-yellow-200 rounded-lg px-3 py-2.5 mb-3 text-[10px] text-yellow-800 font-medium leading-relaxed">
+     <strong>Setup:</strong> Go to <a href="https://www.google.com/recaptcha/admin/create" target="_blank" rel="noopener noreferrer" className="underline font-bold">Google reCAPTCHA Console</a> → Create a new site → Choose <strong>reCAPTCHA v2 "I'm not a robot"</strong> → Add your domain → Copy the <strong>Site Key</strong> below. When enabled, reCAPTCHA appears on Sign In, Sign Up, and Checkout forms.
+   </div>
+   <div className="flex items-center gap-3 mb-3">
+     <label className="flex items-center gap-2 cursor-pointer select-none">
+       <div
+         onClick={() => setRecaptchaEnabled(!recaptchaEnabled)}
+         className={`relative w-10 h-5 rounded-full transition-colors cursor-pointer ${recaptchaEnabled ? 'bg-yellow-500' : 'bg-slate-300'}`}
+       >
+         <div className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${recaptchaEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
+       </div>
+       <span className="text-xs font-semibold text-slate-600">
+         {recaptchaEnabled ? 'Enabled — reCAPTCHA shown on signup/login/checkout' : 'Disabled — reCAPTCHA hidden'}
+       </span>
+     </label>
+   </div>
+   {recaptchaEnabled && (
+     <div>
+       <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">reCAPTCHA v2 Site Key</label>
+       <input
+         type="text"
+         value={recaptchaSiteKey}
+         onChange={(e) => setRecaptchaSiteKey(e.target.value)}
+         placeholder="6Lc..."
+         className="w-full bg-slate-50 border border-slate-200 focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400 rounded-lg px-2.5 py-1.5 text-xs font-mono text-yellow-800 transition-all outline-none"
+       />
+       <p className="text-[10px] text-slate-400 mt-1">Get this from Google reCAPTCHA Console → Your Site → Site Key (starts with 6Lc...).</p>
+     </div>
+   )}
+ </div>
+
+ </div> )}
 
  {/* SECTION: DELIVERY ZONES */}
  {settingsSection ==='delivery' && (

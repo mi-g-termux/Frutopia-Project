@@ -315,6 +315,8 @@ export interface AdminCredentials {
   passwordHash?: string;
   googleSignInEnabled?: boolean;
   googleClientId?: string;
+  recaptchaEnabled?: boolean;       // toggle reCAPTCHA on signup/login/checkout
+  recaptchaSiteKey?: string;        // Google reCAPTCHA v2 site key
 }
 
 export interface SupportSettings {

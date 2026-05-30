@@ -210,6 +210,10 @@ interface AppContextType {
   verifyEmailToken: (email: string, token: string) => { success: boolean; message: string };
   isEmailVerified: (email: string) => boolean;
 
+  // Registration OTP (6-digit code sent to email, used during signup flow)
+  sendRegistrationOtp: (email: string, name: string) => Promise<{ success: boolean; message: string }>;
+  verifyRegistrationOtp: (email: string, otp: string) => { success: boolean; message: string };
+
   // Checkout-time email OTP (works for both registered & guest emails)
   sendCheckoutEmailOtp: (email: string) => Promise<{ success: boolean; message: string }>;
   verifyCheckoutEmailOtp: (email: string, otp: string) => { success: boolean; message: string };
@@ -1120,27 +1124,79 @@ const DEFAULT_ADMIN_ORDER_ALERT = `<!DOCTYPE html>
       if (!fbConfigured || !firebaseAuth) {
         return { success: false, message: 'Google Sign-In requires Firebase to be configured.' };
       }
-      const { GoogleAuthProvider, signInWithPopup } = await import('firebase/auth');
+      const { GoogleAuthProvider, signInWithPopup, fetchSignInMethodsForEmail, linkWithPopup } = await import('firebase/auth');
       const provider = new GoogleAuthProvider();
       if (adminSettings?.googleClientId?.trim()) {
         provider.setCustomParameters({ client_id: adminSettings.googleClientId.trim() });
       }
       provider.addScope('profile');
       provider.addScope('email');
-      const result = await signInWithPopup(firebaseAuth, provider);
-      const firebaseUser = result.user;
+
+      let firebaseUser;
+      try {
+        const result = await signInWithPopup(firebaseAuth, provider);
+        firebaseUser = result.user;
+      } catch (popupErr: any) {
+        // Handle account-exists-with-different-credential
+        if (popupErr?.code === 'auth/account-exists-with-different-credential') {
+          const email = popupErr?.customData?.email || '';
+          if (email) {
+            const methods = await fetchSignInMethodsForEmail(firebaseAuth, email).catch(() => []);
+            const methodNames = methods.join(', ') || 'email/password';
+            return { success: false, message: `An account with ${email} already exists using ${methodNames}. Please sign in with that method first, then link Google from your profile.` };
+          }
+        }
+        if (popupErr?.code === 'auth/popup-closed-by-user') return { success: false, message: 'Sign-in cancelled.' };
+        throw popupErr;
+      }
+
       const email = firebaseUser.email || '';
       const name = firebaseUser.displayName || email.split('@')[0];
-      const profiles = getUserProfiles();
-      let profile: UserProfile = profiles[email.toLowerCase()] || {
+
+      // ✅ Check Firestore for existing account with this email (handles cross-device)
+      let profile: UserProfile | null = null;
+      try {
+        profile = await getUserByEmailFromFirestore(email);
+      } catch { /* Firestore unavailable */ }
+
+      // Fallback: check localStorage
+      if (!profile) {
+        const profiles = getUserProfiles();
+        profile = profiles[email.toLowerCase()] || null;
+      }
+
+      if (profile) {
+        // Existing account — merge Google UID if missing and refresh Firestore
+        const merged = {
+          ...profile,
+          id: profile.id || firebaseUser.uid,
+          name: profile.name || name,
+          // Don't overwrite passwordHash — keeps email/password login working too
+        };
+        await saveUserToFirestore(merged);
+        saveUserProfile(merged);
+        setCurrentUserSession(email);
+        setUserProfileState(merged);
+        setCurrentUserEmail(email);
+        return { success: true, message: `Welcome back, ${merged.name}!` };
+      }
+
+      // New user — create profile
+      const newProfile: UserProfile = {
         id: firebaseUser.uid || Date.now().toString(36),
-        name, email, phone: firebaseUser.phoneNumber || '', address: '', city: '', passwordHash: '',
+        name,
+        email,
+        phone: firebaseUser.phoneNumber || '',
+        address: '',
+        city: '',
+        passwordHash: '', // Google users have no custom password
       };
-      if (!profiles[email.toLowerCase()]) await saveUserToFirestore(profile);
+      await saveUserToFirestore(newProfile);
+      saveUserProfile(newProfile);
       setCurrentUserSession(email);
-      setUserProfileState(profile);
+      setUserProfileState(newProfile);
       setCurrentUserEmail(email);
-      return { success: true, message: 'Welcome, ' + name + '!' };
+      return { success: true, message: `Welcome, ${name}! Your account has been created.` };
     } catch (err: unknown) {
       const e = err as { code?: string; message?: string };
       if (e?.code === 'auth/popup-closed-by-user') return { success: false, message: 'Sign-in cancelled.' };
@@ -1515,6 +1571,81 @@ const DEFAULT_ADMIN_ORDER_ALERT = `<!DOCTYPE html>
       localStorage.setItem(EV_KEY, JSON.stringify(evStore));
     } catch {}
     return { success: true, message: 'Email verified!' };
+  };
+
+  // ── Registration OTP ─────────────────────────────────────────────────────────
+  // Sends a 6-digit OTP to verify email at signup time — same pipeline as checkout OTP.
+  const REG_OTP_KEY = 'qf_reg_otp_store';
+  const getRegOtpStore = (): Record<string, { code: string; expiresAt: number }> => {
+    try { return JSON.parse(localStorage.getItem(REG_OTP_KEY) || '{}'); } catch { return {}; }
+  };
+
+  const sendRegistrationOtp = async (email: string, name: string): Promise<{ success: boolean; message: string }> => {
+    const key = (email || '').trim().toLowerCase();
+    if (!key || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(key)) {
+      return { success: false, message: 'Please enter a valid email address.' };
+    }
+    if (!smtpSettings?.host || !smtpSettings?.email) {
+      return { success: false, message: 'Email service is not configured. Contact the store admin.' };
+    }
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const expiryMinutes = 10;
+    const store = getRegOtpStore();
+    store[key] = { code, expiresAt: Date.now() + expiryMinutes * 60_000 };
+    try { localStorage.setItem(REG_OTP_KEY, JSON.stringify(store)); } catch {}
+
+    const storeName = siteSettings?.websiteName || 'E-Shop';
+    const html = `<div style="font-family:Arial,sans-serif;max-width:480px;margin:auto;padding:24px;background:#f8fafc;border-radius:12px;">
+      <div style="text-align:center;margin-bottom:16px;font-size:40px;">🎉</div>
+      <h2 style="color:#0f172a;margin:0 0 8px;text-align:center;">Verify your email</h2>
+      <p style="color:#475569;font-size:14px;text-align:center;">Hi <strong>${name || 'there'}</strong>, use the code below to complete your ${storeName} account signup.</p>
+      <div style="background:#fff;border:2px dashed #10b981;border-radius:10px;padding:18px;margin:18px 0;text-align:center;font-size:30px;letter-spacing:8px;font-weight:800;color:#065f46;">${code}</div>
+      <p style="color:#64748b;font-size:12px;text-align:center;">This code expires in ${expiryMinutes} minutes. If you didn't try to sign up, you can ignore this email.</p>
+    </div>`;
+    try {
+      const res = await fetch('/api/send-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          to: email,
+          subject: `Your ${storeName} signup verification code`,
+          html,
+          smtpSettings: { ...smtpSettings, fromName: smtpSettings.fromName || storeName },
+        }),
+      });
+      if (!res.ok) {
+        console.error('[REG OTP] send-email failed', res.status);
+        console.log(`[REG OTP DEV] Code for ${email}: ${code}`);
+        return { success: false, message: `Could not send code (server ${res.status}). Please try again.` };
+      }
+    } catch (e) {
+      console.error('[REG OTP] network error', e);
+      console.log(`[REG OTP DEV] Code for ${email}: ${code}`);
+      return { success: false, message: 'Could not reach email server. Please try again.' };
+    }
+    return { success: true, message: `Verification code sent to ${email}. Check your inbox.` };
+  };
+
+  const verifyRegistrationOtp = (email: string, otp: string): { success: boolean; message: string } => {
+    const key = (email || '').trim().toLowerCase();
+    const store = getRegOtpStore();
+    const entry = store[key];
+    if (!entry) return { success: false, message: 'No code found for this email. Request a new one.' };
+    if (Date.now() > entry.expiresAt) {
+      delete store[key];
+      try { localStorage.setItem(REG_OTP_KEY, JSON.stringify(store)); } catch {}
+      return { success: false, message: 'Code expired. Request a new one.' };
+    }
+    if (entry.code !== (otp || '').trim()) return { success: false, message: 'Incorrect code. Try again.' };
+    delete store[key];
+    try { localStorage.setItem(REG_OTP_KEY, JSON.stringify(store)); } catch {}
+    // Mark email as verified in EV store
+    try {
+      const evStore = getEvStore();
+      evStore[key] = { token: 'reg-otp', expiresAt: Date.now() + 365 * 24 * 3600_000, verified: true };
+      localStorage.setItem(EV_KEY, JSON.stringify(evStore));
+    } catch {}
+    return { success: true, message: 'Email verified! Creating your account...' };
   };
 
   // ── ensureUserAfterCheckout ───────────────────────────────────────────────
@@ -2057,15 +2188,23 @@ const DEFAULT_ADMIN_ORDER_ALERT = `<!DOCTYPE html>
 
   // ── Tawk.to Live Chat ──────────────────────────────────────────────────────
   const triggerTawkToLoader = () => {
-    if (!supportSettings?.isEnabled || !supportSettings.tawkToId) return;
+    const ss = supportSettings; // capture from current closure
+    if (!ss?.isEnabled || !ss.tawkToId) return;
     // Cleanly remove any previously-injected widget / scripts
     document.querySelectorAll('script[src*="embed.tawk.to"]').forEach(n => n.remove());
     document.querySelectorAll('iframe[src*="tawk.to"], [class*="tawk-"], [id*="tawk"]').forEach(n => n.remove());
+    // Remove tawk shadow-root container
+    document.querySelectorAll('[id^="tawk-"]').forEach(n => n.remove());
     try { delete (window as any).Tawk_API; delete (window as any).Tawk_LoadStart; } catch {}
 
-    // Accept either "propertyId/widgetId" or "propertyId" (defaults to /default widget)
-    const raw = supportSettings.tawkToId.trim().replace(/^https?:\/\/embed\.tawk\.to\//i, '').replace(/\/+$/, '');
-    const path = raw.includes('/') ? raw : `${raw}/default`;
+    // Accept full URL, "propertyId/widgetId", or just "propertyId"
+    const raw = ss.tawkToId.trim()
+      .replace(/^https?:\/\/embed\.tawk\.to\//i, '')
+      .replace(/^https?:\/\/tawk\.to\//i, '')
+      .replace(/\/+$/, '');
+    // tawk.to requires "propertyId/widgetId" — never use "default" as widgetId
+    // If admin gave only the property ID (no slash), append /1 as the default widget
+    const path = raw.includes('/') ? raw : `${raw}/1`;
 
     (window as any).Tawk_API = (window as any).Tawk_API || {};
     (window as any).Tawk_LoadStart = new Date();
@@ -2075,12 +2214,20 @@ const DEFAULT_ADMIN_ORDER_ALERT = `<!DOCTYPE html>
     s.src = `https://embed.tawk.to/${path}`;
     s.charset = 'UTF-8';
     s.setAttribute('crossorigin', '*');
+    s.onerror = () => console.warn('[Tawk.to] Script failed to load. Check your Property ID/Widget ID in Admin → Support Settings.');
     const firstScript = document.getElementsByTagName('script')[0];
     if (firstScript && firstScript.parentNode) firstScript.parentNode.insertBefore(s, firstScript);
     else document.head.appendChild(s);
+    console.log('[Tawk.to] Widget loading from path:', path);
   };
 
-  useEffect(() => { if (supportSettings?.isEnabled) triggerTawkToLoader(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [supportSettings]);
+  // Re-run loader whenever supportSettings changes (avoids stale closure)
+  useEffect(() => {
+    if (supportSettings?.isEnabled && supportSettings?.tawkToId) {
+      triggerTawkToLoader();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [supportSettings?.isEnabled, supportSettings?.tawkToId]);
 
   // ── BroadcastChannel / StorageEvent sync ────────────────────────────────────
   useEffect(() => {
@@ -2296,6 +2443,7 @@ const DEFAULT_ADMIN_ORDER_ALERT = `<!DOCTYPE html>
         saveSupportSettings, saveSMSSettings, saveEmailVerificationSettings,
         sendSmsOtp, verifySmsOtp, sendEmailVerification, verifyEmailToken, isEmailVerified,
         sendCheckoutEmailOtp, verifyCheckoutEmailOtp, ensureUserAfterCheckout,
+        sendRegistrationOtp, verifyRegistrationOtp,
         addToCart, removeFromCart, updateCartQuantity, clearCart, applyCouponCode, removeCoupon,
         setAdminLoggedIn,
         triggerTawkToLoader,

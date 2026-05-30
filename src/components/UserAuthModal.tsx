@@ -100,7 +100,7 @@ interface UserAuthModalProps {
 }
 
 export const UserAuthModal = ({ isOpen, onClose, defaultTab = 'signin' }: UserAuthModalProps) => {
-  const { loginUser, loginWithGoogle, registerUser, resetUserPassword, sendPasswordOtp, verifyPasswordOtp, userProfile, logoutUser, isUserLoggedIn, updateUserProfile, adminSettings, orders, siteSettings, updateOrderStatus } = useApp();
+  const { loginUser, loginWithGoogle, registerUser, resetUserPassword, sendPasswordOtp, verifyPasswordOtp, sendRegistrationOtp, verifyRegistrationOtp, userProfile, logoutUser, isUserLoggedIn, updateUserProfile, adminSettings, orders, siteSettings, updateOrderStatus } = useApp();
   const toast = useToast();
   const [tab, setTab] = useState<'signin' | 'signup' | 'profile' | 'forgot'>(isUserLoggedIn ? 'profile' : defaultTab);
   const [fpEmail, setFpEmail] = useState('');
@@ -118,6 +118,59 @@ export const UserAuthModal = ({ isOpen, onClose, defaultTab = 'signin' }: UserAu
   const [resendCountdown, setResendCountdown] = useState(0);
   const [wrongOtpAttempts, setWrongOtpAttempts] = useState(0);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Registration OTP step: after filling form, user verifies email via OTP before account is created
+  const [regStep, setRegStep] = useState<'form' | 'otp'>('form');
+  const [regOtp, setRegOtp] = useState('');
+  const [regPendingData, setRegPendingData] = useState<null | { name: string; email: string; phone: string; address: string; city: string; pass: string }>(null);
+  const [regResendCountdown, setRegResendCountdown] = useState(0);
+  const regCountdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // reCAPTCHA state (v2 checkbox)
+  const [recaptchaToken, setRecaptchaToken] = useState<string | null>(null);
+  const recaptchaRef = useRef<HTMLDivElement>(null);
+  const recaptchaWidgetId = useRef<number | null>(null);
+  const recaptchaEnabled = !!(adminSettings?.recaptchaEnabled && adminSettings?.recaptchaSiteKey);
+
+  // Load reCAPTCHA script dynamically when needed
+  useEffect(() => {
+    if (!recaptchaEnabled) return;
+    const siteKey = adminSettings?.recaptchaSiteKey || '';
+    if (!siteKey) return;
+    if (document.querySelector('script[data-recaptcha]')) return; // already loaded
+    const script = document.createElement('script');
+    script.src = 'https://www.google.com/recaptcha/api.js?render=explicit';
+    script.async = true;
+    script.defer = true;
+    script.setAttribute('data-recaptcha', '1');
+    document.head.appendChild(script);
+  }, [recaptchaEnabled, adminSettings?.recaptchaSiteKey]);
+
+  // Render reCAPTCHA widget when signin/signup tab is active
+  useEffect(() => {
+    if (!recaptchaEnabled || !adminSettings?.recaptchaSiteKey) return;
+    if (tab !== 'signin' && tab !== 'signup') return;
+    if (!recaptchaRef.current) return;
+    const render = () => {
+      if (!(window as any).grecaptcha?.render) return;
+      if (recaptchaWidgetId.current !== null) return; // already rendered
+      try {
+        recaptchaWidgetId.current = (window as any).grecaptcha.render(recaptchaRef.current, {
+          sitekey: adminSettings.recaptchaSiteKey,
+          callback: (token: string) => setRecaptchaToken(token),
+          'expired-callback': () => setRecaptchaToken(null),
+        });
+      } catch { /* widget may already exist */ }
+    };
+    const timer = setTimeout(render, 500);
+    return () => clearTimeout(timer);
+  }, [tab, recaptchaEnabled, adminSettings?.recaptchaSiteKey]);
+
+  // Reset reCAPTCHA when tab changes
+  useEffect(() => {
+    setRecaptchaToken(null);
+    recaptchaWidgetId.current = null;
+  }, [tab]);
 
   // Sign in state
   const [siEmail, setSiEmail] = useState('');
@@ -177,6 +230,10 @@ export const UserAuthModal = ({ isOpen, onClose, defaultTab = 'signin' }: UserAu
 
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (recaptchaEnabled && !recaptchaToken) {
+      showPop('error', 'Please complete the reCAPTCHA verification.');
+      return;
+    }
     setLoading(true);
     try {
       const result = await loginUser(siEmail, siPass);
@@ -267,6 +324,7 @@ export const UserAuthModal = ({ isOpen, onClose, defaultTab = 'signin' }: UserAu
     }
   };
 
+  // Step 1: Validate form, send OTP
   const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
     if (suPass !== suPassConf) { showPop('error', 'Passwords do not match.'); return; }
@@ -276,22 +334,74 @@ export const UserAuthModal = ({ isOpen, onClose, defaultTab = 'signin' }: UserAu
       showPop('error', 'Please enter a valid mobile number (6–14 digits).');
       return;
     }
+    if (recaptchaEnabled && !recaptchaToken) {
+      showPop('error', 'Please complete the reCAPTCHA verification.');
+      return;
+    }
+    setLoading(true);
+    try {
+      const result = await sendRegistrationOtp(suEmail, suName);
+      if (result.success) {
+        setRegPendingData({ name: suName, email: suEmail, phone: joinPhone(suDialCode, suPhone), address: suAddress, city: suCity, pass: suPass });
+        setRegStep('otp');
+        setRegOtp('');
+        // Start resend countdown
+        setRegResendCountdown(60);
+        if (regCountdownRef.current) clearInterval(regCountdownRef.current);
+        regCountdownRef.current = setInterval(() => {
+          setRegResendCountdown(p => { if (p <= 1) { clearInterval(regCountdownRef.current!); return 0; } return p - 1; });
+        }, 1000);
+        showPop('success', result.message);
+      } else {
+        showPop('error', result.message);
+      }
+    } catch {
+      showPop('error', 'Something went wrong. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Step 2: Verify OTP then create account
+  const handleRegOtpVerify = async () => {
+    if (!regPendingData || !regOtp.trim()) { showPop('error', 'Enter the 6-digit code.'); return; }
+    const verifyResult = verifyRegistrationOtp(regPendingData.email, regOtp.trim());
+    if (!verifyResult.success) { showPop('error', verifyResult.message); return; }
     setLoading(true);
     try {
       const result = await registerUser(
-        { name: suName, email: suEmail, phone: joinPhone(suDialCode, suPhone), address: suAddress, city: suCity },
-        suPass
+        { name: regPendingData.name, email: regPendingData.email, phone: regPendingData.phone, address: regPendingData.address, city: regPendingData.city },
+        regPendingData.pass,
       );
       if (result.success) {
-        showPop('success', result.message);
+        showPop('success', '🎉 Account created! Welcome, ' + regPendingData.name + '!');
+        setRegStep('form');
+        setRegPendingData(null);
         setTimeout(onClose, 1500);
       } else {
         showPop('error', result.message);
       }
-    } catch (err) {
-      showPop('error', 'Something went wrong. Please try again.');
+    } catch {
+      showPop('error', 'Account creation failed. Please try again.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleRegOtpResend = async () => {
+    if (!regPendingData || regResendCountdown > 0) return;
+    setLoading(true);
+    const result = await sendRegistrationOtp(regPendingData.email, regPendingData.name);
+    setLoading(false);
+    if (result.success) {
+      showPop('success', 'New code sent!');
+      setRegResendCountdown(60);
+      if (regCountdownRef.current) clearInterval(regCountdownRef.current);
+      regCountdownRef.current = setInterval(() => {
+        setRegResendCountdown(p => { if (p <= 1) { clearInterval(regCountdownRef.current!); return 0; } return p - 1; });
+      }, 1000);
+    } else {
+      showPop('error', result.message);
     }
   };
 
@@ -411,7 +521,13 @@ export const UserAuthModal = ({ isOpen, onClose, defaultTab = 'signin' }: UserAu
                   </button>
                 </div>
               </div>
-              <button type="submit" disabled={loading}
+              {/* reCAPTCHA widget (shown only when enabled in admin) */}
+              {recaptchaEnabled && (
+                <div className="flex justify-center">
+                  <div ref={recaptchaRef} />
+                </div>
+              )}
+              <button type="submit" disabled={loading || (recaptchaEnabled && !recaptchaToken)}
                 className="w-full py-3 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white font-bold rounded-xl text-sm shadow-sm transition-all disabled:opacity-60 flex items-center justify-center gap-2">
                 {loading ? <span className="w-4 h-4 border-2 border-white/50 border-t-white rounded-full animate-spin" /> : <LogIn className="w-4 h-4" />}
                 {loading ? 'Signing in...' : 'Sign In'}
@@ -562,6 +678,55 @@ export const UserAuthModal = ({ isOpen, onClose, defaultTab = 'signin' }: UserAu
 
           {/* SIGN UP FORM */}
           {!isUserLoggedIn && tab === 'signup' && (
+          <>
+            {/* OTP Verification Step */}
+            {regStep === 'otp' && regPendingData && (
+              <div className="space-y-4">
+                <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-center space-y-1">
+                  <div className="text-2xl">📧</div>
+                  <p className="text-sm font-bold text-slate-700">Check your inbox!</p>
+                  <p className="text-xs text-slate-500">We sent a 6-digit code to <span className="font-mono font-bold text-emerald-700">{regPendingData.email}</span></p>
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1.5">6-Digit Verification Code</label>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={6}
+                    value={regOtp}
+                    onChange={e => setRegOtp(e.target.value.replace(/\D/g, ''))}
+                    placeholder="Enter code"
+                    className="w-full text-center text-2xl font-bold tracking-widest py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-emerald-400 focus:bg-white transition-all"
+                    autoFocus
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={handleRegOtpVerify}
+                  disabled={loading || regOtp.length < 6}
+                  className="w-full py-3 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white font-bold rounded-xl text-sm shadow-sm transition-all disabled:opacity-60 flex items-center justify-center gap-2"
+                >
+                  {loading ? <span className="w-4 h-4 border-2 border-white/50 border-t-white rounded-full animate-spin" /> : null}
+                  {loading ? 'Verifying...' : '✅ Verify & Create Account'}
+                </button>
+                <div className="flex items-center justify-between">
+                  <button type="button" onClick={() => { setRegStep('form'); setRegOtp(''); }} className="text-xs text-slate-500 hover:text-slate-700 underline">
+                    ← Back to form
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleRegOtpResend}
+                    disabled={loading || regResendCountdown > 0}
+                    className="text-xs text-emerald-600 font-semibold hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {regResendCountdown > 0 ? `Resend in ${regResendCountdown}s` : 'Resend code'}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Sign-Up Form */}
+            {regStep === 'form' && (
             <form onSubmit={handleSignUp} className="space-y-3">
               <div className="grid grid-cols-1 gap-3">
                 <div>
@@ -692,6 +857,8 @@ export const UserAuthModal = ({ isOpen, onClose, defaultTab = 'signin' }: UserAu
 
               <p className="text-center text-xs text-slate-400">Already have an account? <button type="button" onClick={() => setTab('signin')} className="text-emerald-600 font-bold hover:underline">Sign In</button></p>
             </form>
+            )}
+          </>
           )}
 
           {/* PROFILE VIEW */}
