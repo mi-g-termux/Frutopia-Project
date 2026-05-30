@@ -1534,7 +1534,7 @@ const DEFAULT_ADMIN_ORDER_ALERT = `<!DOCTYPE html>
   };
 
   const placeOrder = async (
-    orderData: Omit<Order, 'id' | 'orderNumber' | 'createdAt' | 'orderStatus' | 'paymentStatus'>,
+    orderData: Omit<Order, 'id' | 'orderNumber' | 'createdAt' | 'orderStatus' | 'paymentStatus'> & { paymentStatus?: Order['paymentStatus'] },
   ): Promise<Order> => {
     const newOrder: Order = {
       ...orderData,
@@ -1542,7 +1542,7 @@ const DEFAULT_ADMIN_ORDER_ALERT = `<!DOCTYPE html>
       orderNumber: 'QF-' + Math.floor(10000 + Math.random() * 90000),
       createdAt: new Date().toISOString(),
       orderStatus: 'Pending',
-      paymentStatus: 'Pending',
+      paymentStatus: orderData.paymentStatus ?? 'Pending',
     };
     await dbService.saveOrder(newOrder);
     setOrders(prev => [newOrder, ...prev]);
@@ -1560,6 +1560,13 @@ const DEFAULT_ADMIN_ORDER_ALERT = `<!DOCTYPE html>
     try {
       const storeName = (siteSettings?.websiteName || 'Store').trim();
 
+      // Currency formatter that respects the admin's currency symbol /
+      // position so emails never fall back to a hardcoded "$".
+      const _sym = siteSettings?.currencySymbol || '$';
+      const _pos = (siteSettings?.currencyPosition || 'before') as 'before' | 'after';
+      const fmtMoney = (n: number) =>
+        _pos === 'after' ? `${n.toFixed(2)}${_sym}` : `${_sym}${n.toFixed(2)}`;
+
       // Generate the invoice as a PDF on the client so the customer receives
       // it as a proper attachment, not just an inline HTML email.
       let invoicePdfBase64: string | null = null;
@@ -1571,7 +1578,7 @@ const DEFAULT_ADMIN_ORDER_ALERT = `<!DOCTYPE html>
       }
 
       const itemsHtml = newOrder.items.map(i =>
-        `<tr><td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;color:#1e293b;">${i.name}</td><td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;color:#475569;text-align:center;">${i.quantity}</td><td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;color:#475569;text-align:right;">$${i.price.toFixed(2)}</td></tr>`
+        `<tr><td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;color:#1e293b;">${i.name}</td><td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;color:#475569;text-align:center;">${i.quantity}</td><td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;color:#475569;text-align:right;">${fmtMoney(i.price)}</td></tr>`
       ).join('');
       const confirmationHtml = (
         smtpSettings?.orderConfirmationTemplate ||
@@ -1589,9 +1596,9 @@ const DEFAULT_ADMIN_ORDER_ALERT = `<!DOCTYPE html>
             <tbody>{{items}}</tbody>
           </table>
           <div style="margin-top:16px;text-align:right;font-size:14px;">
-            <p style="color:#64748b;margin:4px 0;">Subtotal: <strong>\${{subtotal}}</strong></p>
-            <p style="color:#64748b;margin:4px 0;">Delivery: <strong>\${{deliveryFee}}</strong></p>
-            <p style="color:#059669;font-size:18px;font-weight:900;margin:8px 0 0;">Total: <strong>\${{total}}</strong></p>
+            <p style="color:#64748b;margin:4px 0;">Subtotal: <strong>{{subtotal}}</strong></p>
+            <p style="color:#64748b;margin:4px 0;">Delivery: <strong>{{deliveryFee}}</strong></p>
+            <p style="color:#059669;font-size:18px;font-weight:900;margin:8px 0 0;">Total: <strong>{{total}}</strong></p>
           </div>
           <div style="margin-top:24px;padding:16px;background:#f1f5f9;border-radius:8px;font-size:13px;color:#475569;">
             <p style="margin:0 0 4px;"><strong>Deliver to:</strong> ${newOrder.address}, ${newOrder.city}</p>
@@ -1600,12 +1607,14 @@ const DEFAULT_ADMIN_ORDER_ALERT = `<!DOCTYPE html>
           <p style="text-align:center;color:#94a3b8;font-size:11px;margin-top:24px;">Thank you for shopping at ${storeName}!</p>
         </div>`
       )
-        .replace('{{orderNumber}}', newOrder.orderNumber)
-        .replace('{{customerName}}', newOrder.customerName)
-        .replace('{{items}}', itemsHtml)
-        .replace('{{subtotal}}', newOrder.subtotal.toFixed(2))
-        .replace('{{deliveryFee}}', newOrder.deliveryFee.toFixed(2))
-        .replace('{{total}}', newOrder.total.toFixed(2));
+        .replace(/\{\{orderNumber\}\}/g, newOrder.orderNumber)
+        .replace(/\{\{customerName\}\}/g, newOrder.customerName)
+        .replace(/\{\{items\}\}/g, itemsHtml)
+        .replace(/\{\{subtotal\}\}/g, fmtMoney(newOrder.subtotal))
+        .replace(/\{\{deliveryFee\}\}/g, fmtMoney(newOrder.deliveryFee))
+        .replace(/\{\{total\}\}/g, fmtMoney(newOrder.total))
+        .replace(/\{\{currency\}\}/g, siteSettings?.currency || '')
+        .replace(/\{\{currencySymbol\}\}/g, _sym);
 
       const orderSubject = smtpSettings?.orderConfirmationSubject || `[${storeName}] Order #${newOrder.orderNumber} Confirmed!`;
 
@@ -1645,7 +1654,7 @@ const DEFAULT_ADMIN_ORDER_ALERT = `<!DOCTYPE html>
               <p style="color:#475569;margin:4px 0;"><strong>Phone:</strong> ${newOrder.phone}</p>
               <p style="color:#475569;margin:4px 0;"><strong>Address:</strong> ${newOrder.address}, ${newOrder.city}</p>
               <p style="color:#475569;margin:4px 0;"><strong>Payment:</strong> ${newOrder.paymentMethod}</p>
-              <p style="color:#475569;margin:4px 0;"><strong>Total:</strong> $${newOrder.total.toFixed(2)}</p>
+              <p style="color:#475569;margin:4px 0;"><strong>Total:</strong> ${fmtMoney(newOrder.total)}</p>
             </div>
             <table style="width:100%;border-collapse:collapse;background:#fff;border-radius:10px;overflow:hidden;border:2px solid #e2e8f0;">
               <thead><tr style="background:#0f172a;color:#fff;"><th style="padding:8px 12px;text-align:left;font-size:11px;text-transform:uppercase;">Item</th><th style="padding:8px 12px;text-align:center;font-size:11px;text-transform:uppercase;">Qty</th><th style="padding:8px 12px;text-align:right;font-size:11px;text-transform:uppercase;">Price</th></tr></thead>

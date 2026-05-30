@@ -24,11 +24,36 @@ interface BuildInvoiceOptions {
   origin?: string;
 }
 
-/** Currency formatter that respects admin's symbol + position. */
+/**
+ * Currency formatter that respects admin's symbol + position.
+ *
+ * jsPDF's built-in fonts (Helvetica/Times/Courier) only support the
+ * WinAnsi (Latin-1) glyph set. Symbols outside that range — like the
+ * Bangladeshi Taka sign "৳" (U+09F3), Indian Rupee "₹", or Naira "₦" —
+ * render as empty boxes / tofu in the PDF. For those, fall back to the
+ * 3-letter ISO currency code (e.g. "BDT 152.09") so the receipt is
+ * always readable.
+ */
+function isLatin1Safe(s: string): boolean {
+  for (let i = 0; i < s.length; i++) {
+    if (s.charCodeAt(i) > 0xff) return false;
+  }
+  return true;
+}
+
 function makeFormatter(siteSettings: SiteSettings) {
-  const sym = siteSettings.currencySymbol || '$';
+  const rawSym = siteSettings.currencySymbol || '$';
+  const code = (siteSettings.currency || '').toString().trim().toUpperCase();
+  const safeSym = isLatin1Safe(rawSym) ? rawSym : (code || 'USD');
+  // When we had to drop a fancy symbol for a 3-letter code, add a space
+  // so it reads like "BDT 1,234.56" instead of "BDT1,234.56".
+  const usedCode = safeSym === code;
   const pos = (siteSettings.currencyPosition || 'before') as 'before' | 'after';
-  return (n: number) => (pos === 'after' ? `${n.toFixed(2)}${sym}` : `${sym}${n.toFixed(2)}`);
+  return (n: number) => {
+    const amt = n.toFixed(2);
+    const sep = usedCode ? ' ' : '';
+    return pos === 'after' ? `${amt}${sep}${safeSym}` : `${safeSym}${sep}${amt}`;
+  };
 }
 
 /** Trim and sanitize storefront name; fall back to a neutral label. */

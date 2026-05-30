@@ -631,20 +631,37 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
           }
         }
 
-        // Intercept order and open interactive gateway simulation overlay (fallback when API credentials not set)
-        setStoredOrderData(orderData);
-        setIsAutoPortalOpen(true);
-        setAutoStep(0);
-        setAutoPhoneInput(phone || '');
-        setAutoOtpInput('');
-        setAutoPinInput('');
-        setAutoPaypalEmailInput(email || '');
-        setAutoPaypalPasswordInput('');
-        setAutoCardNumberInput('');
-        setAutoCardExpiryInput('');
-        setAutoCardCvcInput('');
-        setAutoCardHolderInput(customerName || '');
-        setAutoPortalError('');
+        // Auto gateway with no real API credentials: finalise the order as
+        // PAID immediately and show the confirmed invoice (same UX as COD,
+        // but with a "Payment Confirmed" badge instead of "COD Placed").
+        const autoLabelMap: Record<string, string> = {
+          bKashAuto: 'bKash (Auto)',
+          NagadAuto: 'Nagad (Auto)',
+          PayPal: 'PayPal',
+          Stripe: 'Stripe',
+          SSLCommerz: 'SSLCommerz',
+          Razorpay: 'Razorpay',
+        };
+        const autoLabel = autoLabelMap[paymentMethod] || paymentMethod;
+        const autoPlaced = await placeOrder({
+          ...orderData,
+          paymentMethod: autoLabel,
+          paymentStatus: 'Paid',
+          transactionId: `AUTO-${Date.now()}`,
+        } as any);
+        setCurrentUserEmail(email.trim().toLowerCase());
+        try {
+          await ensureUserAfterCheckout({
+            email, name: customerName, phone, address, city, postalCode,
+          });
+        } catch (e) { console.warn('ensureUserAfterCheckout failed (non-blocking):', e); }
+        toast.success(`Payment confirmed via ${autoLabel}. Order: ${autoPlaced.orderNumber}`);
+        setPlacedInvoiceOrder(autoPlaced);
+        clearCart();
+        setCustomerName(''); setEmail(''); setPhoneLocal('');
+        setOtpSent(false); setOtpVerified(false); setOtpCode(''); setOtpVerifyingPhone('');
+        setAddress(''); setCity(''); setPostalCode(''); setDeliveryNote('');
+        setCardNumber(''); setCardExpiry(''); setCardCVC(''); setManualTxId('');
         return;
       }
 
@@ -667,7 +684,14 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
         }
       } catch (e) { console.warn('ensureUserAfterCheckout failed (non-blocking):', e); }
 
-      toast.success(`Order placed successfully. Order Number: ${placedOrder.orderNumber}`);
+      {
+        const isManual = ['bKash', 'Nagad', 'Rocket', 'Bank', 'CreditManual'].includes(paymentMethod);
+        if (isManual) {
+          toast.success(`Order received. We'll confirm after verifying your ${paymentMethod} payment. Order: ${placedOrder.orderNumber}`);
+        } else {
+          toast.success(`Order placed successfully. Order Number: ${placedOrder.orderNumber}`);
+        }
+      }
       setPlacedInvoiceOrder(placedOrder);
 
       // ✅ Clear cart after successful order
@@ -1035,17 +1059,8 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
         {/* Header Block */}
         <div className="flex items-center justify-between border-b border-slate-200 pb-4 mb-4 select-none">
           <div className="flex items-center gap-2.5">
-            <div className="w-7 h-7 rounded-lg overflow-hidden flex items-center justify-center bg-emerald-50 border border-emerald-100 flex-shrink-0">
-              {siteSettings.logoUrl && siteSettings.logoUrl.trim() !== '' ? (
-                <img
-                  src={siteSettings.logoUrl}
-                  alt={siteSettings.websiteName || 'Logo'}
-                  className="w-full h-full object-contain"
-                  onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
-                />
-              ) : (
-                <QuirkyFruityLogo className="w-full h-full" />
-              )}
+            <div className="w-8 h-8 rounded-lg flex items-center justify-center bg-gradient-to-br from-emerald-400 to-emerald-600 shadow-sm flex-shrink-0">
+              <ShoppingBag className="w-4 h-4 text-white" strokeWidth={2.5} />
             </div>
             <h2 className="text-lg sm:text-xl font-bold text-slate-800 uppercase tracking-tight">
               Secure Checkout
@@ -1075,9 +1090,27 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
                   <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">SALES RECEIPT</p>
                 </div>
                 <div className="text-right">
-                  <div className="bg-emerald-100 text-emerald-800 text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 border border-emerald-300 rounded-full">
-                    COD PLACED
-                  </div>
+                  {(() => {
+                    const pm = placedInvoiceOrder.paymentMethod || 'COD';
+                    const paid = placedInvoiceOrder.paymentStatus === 'Paid';
+                    const isManual = ['bKash', 'Nagad', 'Rocket', 'Bank', 'CreditManual'].includes(pm);
+                    const isCOD = pm === 'COD';
+                    const label = isCOD
+                      ? 'COD PLACED'
+                      : isManual
+                        ? `${pm.toUpperCase()} · ORDER RECEIVED`
+                        : paid
+                          ? `${pm.toUpperCase()} · PAYMENT CONFIRMED`
+                          : `${pm.toUpperCase()} · ORDER PLACED`;
+                    const tone = isManual
+                      ? 'bg-amber-100 text-amber-800 border-amber-300'
+                      : 'bg-emerald-100 text-emerald-800 border-emerald-300';
+                    return (
+                      <div className={`text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 border rounded-full ${tone}`}>
+                        {label}
+                      </div>
+                    );
+                  })()}
                   <div className="text-xs font-bold text-slate-700 mt-1">NO: {placedInvoiceOrder.orderNumber}</div>
                 </div>
               </div>
@@ -1130,7 +1163,15 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
               </div>
 
               <div className="text-center text-xs text-slate-400 mt-6 border-t border-dashed border-slate-200 pt-3">
-                <p className="font-semibold text-xs text-emerald-600">Thank you for your order!</p>
+                <p className="font-semibold text-xs text-emerald-600">
+                  {(() => {
+                    const pm = placedInvoiceOrder.paymentMethod || 'COD';
+                    const isManual = ['bKash', 'Nagad', 'Rocket', 'Bank', 'CreditManual'].includes(pm);
+                    if (isManual) return `Order received — we'll confirm after verifying your ${pm} payment.`;
+                    if (placedInvoiceOrder.paymentStatus === 'Paid') return 'Payment confirmed. Thank you for your order!';
+                    return 'Thank you for your order!';
+                  })()}
+                </p>
                 <p className="mt-1 text-[10px] leading-relaxed">Your confirmation receipt invoice email has been compiled and forwarded to <strong>{placedInvoiceOrder.email}</strong>.</p>
                 <p className="mt-3 text-[9px] text-slate-400 capitalize">
                   {(() => {
