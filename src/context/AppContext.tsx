@@ -1091,28 +1091,61 @@ const DEFAULT_ADMIN_ORDER_ALERT = `<!DOCTYPE html>
   };
 
   const loginUser = async (email: string, password: string): Promise<{ success: boolean; message: string }> => {
-    const hash = simpleHash(password);
-    // Try Firestore first
     try {
-      const firestoreProfile = await getUserByEmailFromFirestore(email);
-      if (firestoreProfile) {
-        if (firestoreProfile.passwordHash !== hash) return { success: false, message: 'Incorrect password.' };
-        saveUserProfile(firestoreProfile); // refresh cache
-        setCurrentUserSession(email);
-        setUserProfileState(firestoreProfile);
-        setCurrentUserEmail(email);
-        return { success: true, message: 'Welcome back, ' + firestoreProfile.name + '!' };
+      const emailLower = email.trim().toLowerCase();
+      const hash = simpleHash(password);
+      
+      // ✅ Validate hash was generated
+      if (!hash || hash.length === 0) {
+        return { success: false, message: 'Invalid password format. Please try again.' };
       }
-    } catch { /* Firestore unavailable — fall through to localStorage */ }
-    // Fallback: localStorage cache
-    const profiles = getUserProfiles();
-    const profile = profiles[email.toLowerCase()];
-    if (!profile) return { success: false, message: 'No account found with this email.' };
-    if (profile.passwordHash !== hash) return { success: false, message: 'Incorrect password.' };
-    setCurrentUserSession(email);
-    setUserProfileState(profile);
-    setCurrentUserEmail(email);
-    return { success: true, message: 'Welcome back, ' + profile.name + '!' };
+      
+      // ✅ Try Firestore FIRST (source of truth for cross-device login)
+      try {
+        const firestoreProfile = await getUserByEmailFromFirestore(emailLower);
+        if (firestoreProfile) {
+          // Check if this is a Google-only account
+          if (!firestoreProfile.passwordHash) {
+            return { success: false, message: 'This account uses Google Sign-In. Please use the Google button.' };
+          }
+          if (firestoreProfile.passwordHash !== hash) {
+            return { success: false, message: 'Incorrect password.' };
+          }
+          // ✅ Update localStorage cache on successful Firestore login
+          saveUserProfile(firestoreProfile);
+          setCurrentUserSession(emailLower);
+          setUserProfileState(firestoreProfile);
+          setCurrentUserEmail(emailLower);
+          console.log('[loginUser] ✅ Login successful from Firestore');
+          return { success: true, message: 'Welcome back, ' + firestoreProfile.name + '!' };
+        }
+      } catch (fbError) { 
+        console.warn('[loginUser] Firestore lookup failed:', fbError);
+        // Fall through to localStorage
+      }
+      
+      // ✅ Fallback: localStorage cache
+      const profiles = getUserProfiles();
+      const profile = profiles[emailLower];
+      if (!profile) {
+        return { success: false, message: 'No account found with this email.' };
+      }
+      if (!profile.passwordHash) {
+        return { success: false, message: 'This account uses Google Sign-In. Please use the Google button.' };
+      }
+      if (profile.passwordHash !== hash) {
+        return { success: false, message: 'Incorrect password.' };
+      }
+      
+      setCurrentUserSession(emailLower);
+      setUserProfileState(profile);
+      setCurrentUserEmail(emailLower);
+      console.log('[loginUser] ✅ Login successful from localStorage');
+      return { success: true, message: 'Welcome back, ' + profile.name + '!' };
+    } catch (err: any) {
+      console.error('[loginUser] Login error:', err);
+      return { success: false, message: 'Login failed. Please try again.' };
+    }
   };
 
   const loginWithGoogle = async (): Promise<{ success: boolean; message: string }> => {
@@ -1126,6 +1159,7 @@ const DEFAULT_ADMIN_ORDER_ALERT = `<!DOCTYPE html>
       }
       const { GoogleAuthProvider, signInWithPopup, fetchSignInMethodsForEmail, linkWithPopup } = await import('firebase/auth');
       const provider = new GoogleAuthProvider();
+      // ✅ Set custom Google Client ID if provided
       if (adminSettings?.googleClientId?.trim()) {
         provider.setCustomParameters({ client_id: adminSettings.googleClientId.trim() });
       }
@@ -1136,6 +1170,7 @@ const DEFAULT_ADMIN_ORDER_ALERT = `<!DOCTYPE html>
       try {
         const result = await signInWithPopup(firebaseAuth, provider);
         firebaseUser = result.user;
+        console.log('[loginWithGoogle] ✅ Google sign-in successful:', firebaseUser.email);
       } catch (popupErr: any) {
         // Handle account-exists-with-different-credential
         if (popupErr?.code === 'auth/account-exists-with-different-credential') {
@@ -1150,38 +1185,54 @@ const DEFAULT_ADMIN_ORDER_ALERT = `<!DOCTYPE html>
         throw popupErr;
       }
 
-      const email = firebaseUser.email || '';
+      const email = (firebaseUser.email || '').toLowerCase();
       const name = firebaseUser.displayName || email.split('@')[0];
 
       // ✅ Check Firestore for existing account with this email (handles cross-device)
       let profile: UserProfile | null = null;
       try {
         profile = await getUserByEmailFromFirestore(email);
-      } catch { /* Firestore unavailable */ }
+        if (profile) {
+          console.log('[loginWithGoogle] ✅ Found existing account in Firestore');
+        }
+      } catch (fbError) { 
+        console.warn('[loginWithGoogle] Firestore query failed:', fbError);
+      }
 
       // Fallback: check localStorage
       if (!profile) {
         const profiles = getUserProfiles();
-        profile = profiles[email.toLowerCase()] || null;
+        profile = profiles[email] || null;
+        if (profile) {
+          console.log('[loginWithGoogle] Found existing account in localStorage');
+        }
       }
 
       if (profile) {
-        // Existing account — merge Google UID if missing and refresh Firestore
-        const merged = {
+        // ✅ Existing account — merge Google UID and refresh Firestore
+        const merged: UserProfile = {
           ...profile,
           id: profile.id || firebaseUser.uid,
           name: profile.name || name,
           // Don't overwrite passwordHash — keeps email/password login working too
         };
-        await saveUserToFirestore(merged);
+        
+        // ✅ Update in Firestore
+        try {
+          await saveUserToFirestore(merged);
+          console.log('[loginWithGoogle] ✅ Updated existing account in Firestore');
+        } catch (fbError) {
+          console.warn('[loginWithGoogle] Failed to update Firestore:', fbError);
+        }
+        
         saveUserProfile(merged);
         setCurrentUserSession(email);
         setUserProfileState(merged);
         setCurrentUserEmail(email);
-        return { success: true, message: `Welcome back, ${merged.name}!` };
+        return { success: true, message: `Welcome back, ${merged.name}! 👋` };
       }
 
-      // New user — create profile
+      // ✅ NEW ACCOUNT - Create profile with proper Firebase integration
       const newProfile: UserProfile = {
         id: firebaseUser.uid || Date.now().toString(36),
         name,
@@ -1189,106 +1240,213 @@ const DEFAULT_ADMIN_ORDER_ALERT = `<!DOCTYPE html>
         phone: firebaseUser.phoneNumber || '',
         address: '',
         city: '',
-        passwordHash: '', // Google users have no custom password
+        passwordHash: '', // ✅ Google users have no custom password
+        orderIds: [],
       };
-      await saveUserToFirestore(newProfile);
+      
+      console.log('[loginWithGoogle] Creating new account:', {
+        email: newProfile.email,
+        id: newProfile.id,
+        name: newProfile.name,
+      });
+
+      // ✅ Save to Firestore FIRST
+      try {
+        await saveUserToFirestore(newProfile);
+        console.log('[loginWithGoogle] ✅ New account saved to Firestore');
+      } catch (fbError) {
+        console.warn('[loginWithGoogle] Failed to save to Firestore:', fbError);
+      }
+      
       saveUserProfile(newProfile);
       setCurrentUserSession(email);
       setUserProfileState(newProfile);
       setCurrentUserEmail(email);
-      return { success: true, message: `Welcome, ${name}! Your account has been created.` };
+      return { success: true, message: `Welcome, ${name}! 🎉 Your account has been created.` };
     } catch (err: unknown) {
       const e = err as { code?: string; message?: string };
       if (e?.code === 'auth/popup-closed-by-user') return { success: false, message: 'Sign-in cancelled.' };
+      console.error('[loginWithGoogle] Error:', e?.message);
       return { success: false, message: e?.message || 'Google sign-in failed.' };
     }
   };
 
   const registerUser = async (profile: UserProfile, password: string): Promise<{ success: boolean; message: string }> => {
-    const profiles = getUserProfiles();
-    if (profiles[profile.email.toLowerCase()]) return { success: false, message: 'An account already exists with this email.' };
-    const newProfile = { ...profile, id: profile.id || Date.now().toString(36), passwordHash: simpleHash(password) };
-    await saveUserToFirestore(newProfile); // writes to Firestore + localStorage cache
-    setCurrentUserSession(profile.email);
-    setUserProfileState(newProfile);
-    setCurrentUserEmail(profile.email);
-
-    // ── Send welcome email to new user ──────────────────────────────────────
     try {
-      const storeName = siteSettings?.websiteName || 'Fruitopia';
-      const welcomeHtml = (
-        smtpSettings?.welcomeTemplate ||
-        `<div style="font-family:sans-serif;max-width:480px;margin:auto;padding:24px;background:#f8fafc;border-radius:12px;">
-          <div style="text-align:center;font-size:48px;margin-bottom:12px;">🎉</div>
-          <h2 style="color:#0f172a;text-align:center;margin:0;">Welcome to ${storeName}!</h2>
-          <p style="color:#64748b;text-align:center;font-size:14px;">Hi <strong>{{customerName}}</strong>, your account is all set!</p>
-          <div style="background:#fff;border:2px solid #e2e8f0;border-radius:10px;padding:20px;margin:20px 0;text-align:center;">
-            <p style="color:#475569;font-size:13px;margin:0;">Start exploring our delicious range of fresh, organic products. Order now and enjoy fast delivery!</p>
-          </div>
-          <div style="text-align:center;margin-top:20px;">
-            <a href="/" style="display:inline-block;background:#059669;color:#fff;text-decoration:none;padding:12px 32px;border-radius:8px;font-weight:700;font-size:14px;">Shop Now</a>
-          </div>
-          <p style="text-align:center;color:#94a3b8;font-size:11px;margin-top:24px;">Thank you for joining ${storeName}!</p>
-        </div>`
-      ).replace('{{customerName}}', newProfile.name);
+      // ✅ CRITICAL: Validate inputs
+      if (!password || password.length < 6) {
+        return { success: false, message: 'Password must be at least 6 characters.' };
+      }
+      if (!profile.email || !profile.name) {
+        return { success: false, message: 'Email and name are required.' };
+      }
 
-      const welcomeSubject = smtpSettings?.welcomeSubject || `Welcome to ${storeName}, ${newProfile.name}!`;
+      // ✅ Check for existing accounts
+      const profiles = getUserProfiles();
+      const emailLower = profile.email.toLowerCase();
+      if (profiles[emailLower]) {
+        return { success: false, message: 'An account already exists with this email.' };
+      }
 
-      fetch('/api/send-email', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          to: newProfile.email,
-          subject: welcomeSubject,
-          html: welcomeHtml,
-          smtpSettings: smtpSettings ? { ...smtpSettings, fromName: smtpSettings.fromName || storeName } : null,
-        }),
-      }).catch(() => {});
-    } catch { /* email failure is non-blocking */ }
+      // ✅ CRITICAL: Generate ID and hash password IMMEDIATELY
+      const userId = profile.id || Date.now().toString(36);
+      const passwordHash = simpleHash(password);
+      
+      // ✅ Verify hash was created and is not empty
+      if (!passwordHash || passwordHash.length === 0) {
+        console.error('[registerUser] ❌ Password hashing failed - hash is empty!');
+        return { success: false, message: 'Failed to process password. Please try again.' };
+      }
 
-    return { success: true, message: 'Account created! Welcome, ' + profile.name + '!' };
+      // ✅ Create complete profile with ALL required fields
+      const newProfile: UserProfile = {
+        id: userId,
+        name: profile.name,
+        email: emailLower,
+        phone: profile.phone || '',
+        address: profile.address || '',
+        city: profile.city || '',
+        passwordHash: passwordHash, // ✅ ALWAYS SET, NEVER EMPTY OR UNDEFINED
+        orderIds: [],
+      };
+
+      console.log('[registerUser] Creating account with:', {
+        email: newProfile.email,
+        name: newProfile.name,
+        id: newProfile.id,
+        hasPasswordHash: !!newProfile.passwordHash,
+        passwordHashLength: newProfile.passwordHash.length,
+      });
+
+      // ✅ CRITICAL: Save to Firestore FIRST with error handling
+      let firebaseWriteSuccess = false;
+      try {
+        await saveUserToFirestore(newProfile);
+        firebaseWriteSuccess = true;
+        console.log('[registerUser] ✅ Successfully saved to Firestore with password hash');
+      } catch (fbError: any) {
+        console.error('[registerUser] ❌ Firebase write failed:', fbError?.message);
+        // Continue with localStorage fallback
+      }
+
+      // ✅ Also save to localStorage cache
+      try {
+        saveUserProfile(newProfile);
+        console.log('[registerUser] ✅ Successfully saved to localStorage cache');
+      } catch (cacheError: any) {
+        console.error('[registerUser] ⚠️ Local cache save failed:', cacheError?.message);
+      }
+
+      // ✅ Set current session
+      setCurrentUserSession(emailLower);
+      setUserProfileState(newProfile);
+      setCurrentUserEmail(emailLower);
+
+      // ✅ Send welcome email asynchronously (non-blocking)
+      try {
+        const storeName = siteSettings?.websiteName || 'Fruitopia';
+        const welcomeHtml = (
+          smtpSettings?.welcomeTemplate ||
+          `<div style="font-family:sans-serif;max-width:480px;margin:auto;padding:24px;background:#f8fafc;border-radius:12px;">
+            <div style="text-align:center;font-size:48px;margin-bottom:12px;">🎉</div>
+            <h2 style="color:#0f172a;text-align:center;margin:0;">Welcome to ${storeName}!</h2>
+            <p style="color:#64748b;text-align:center;font-size:14px;">Hi <strong>{{customerName}}</strong>, your account is all set!</p>
+            <div style="background:#fff;border:2px solid #e2e8f0;border-radius:10px;padding:20px;margin:20px 0;text-align:center;">
+              <p style="color:#475569;font-size:13px;margin:0;">Start exploring our delicious range of fresh, organic products. Order now and enjoy fast delivery!</p>
+            </div>
+            <div style="text-align:center;margin-top:20px;">
+              <a href="/" style="display:inline-block;background:#059669;color:#fff;text-decoration:none;padding:12px 32px;border-radius:8px;font-weight:700;font-size:14px;">Shop Now</a>
+            </div>
+            <p style="text-align:center;color:#94a3b8;font-size:11px;margin-top:24px;">Thank you for joining ${storeName}!</p>
+          </div>`
+        ).replace('{{customerName}}', newProfile.name);
+
+        const welcomeSubject = smtpSettings?.welcomeSubject || `Welcome to ${storeName}, ${newProfile.name}!`;
+
+        fetch('/api/send-email', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            to: newProfile.email,
+            subject: welcomeSubject,
+            html: welcomeHtml,
+            smtpSettings: smtpSettings ? { ...smtpSettings, fromName: smtpSettings.fromName || storeName } : null,
+          }),
+        }).catch(() => {});
+      } catch { /* email failure is non-blocking */ }
+
+      return { 
+        success: true, 
+        message: '🎉 Account created! Welcome, ' + newProfile.name + '!' 
+      };
+    } catch (err: any) {
+      console.error('[registerUser] Unexpected error:', err);
+      return { success: false, message: err?.message || 'Account creation failed. Please try again.' };
+    }
   };
 
   const resetUserPassword = async (email: string, newPassword: string): Promise<{ success: boolean; message: string }> => {
-    const key = email.trim().toLowerCase();
-    
-    if (!newPassword || newPassword.length < 6) {
-      return { success: false, message: 'Password must be at least 6 characters.' };
-    }
-    
-    // ✅ FIXED: Try Firestore FIRST (source of truth)
-    let updated = false;
     try {
-      const firestoreProfile = await getUserByEmailFromFirestore(email);
-      if (firestoreProfile) {
-        const newHash = simpleHash(newPassword);
-        const updatedProfile = { ...firestoreProfile, passwordHash: newHash };
-        
-        await saveUserToFirestore(updatedProfile);
-        if (userProfile?.email?.toLowerCase() === key) setUserProfileState(updatedProfile);
-        updated = true;
+      const key = email.trim().toLowerCase();
+      
+      // ✅ Validate password
+      if (!newPassword || newPassword.length < 6) {
+        return { success: false, message: 'Password must be at least 6 characters.' };
       }
-    } catch (firebaseErr) {
-      console.warn('[Auth] Firestore update failed, trying localStorage:', firebaseErr);
-    }
-    
-    // ✅ Fall back to localStorage if Firestore unavailable
-    if (!updated) {
-      const profiles = getUserProfiles();
-      const profile = profiles[key];
-      if (profile) {
-        const newHash = simpleHash(newPassword);
-        const updatedProfile = { ...profile, passwordHash: newHash };
-        
-        saveUserProfile(updatedProfile);
-        if (userProfile?.email?.toLowerCase() === key) setUserProfileState(updatedProfile);
-        updated = true;
+      
+      // ✅ Hash password IMMEDIATELY and verify
+      const newHash = simpleHash(newPassword);
+      if (!newHash || newHash.length === 0) {
+        console.error('[resetUserPassword] Password hashing failed - hash is empty!');
+        return { success: false, message: 'Failed to process password. Please try again.' };
       }
+
+      // ✅ Try Firestore FIRST (source of truth)
+      let updated = false;
+      try {
+        const firestoreProfile = await getUserByEmailFromFirestore(key);
+        if (firestoreProfile) {
+          const updatedProfile = { ...firestoreProfile, passwordHash: newHash }; // ✅ ALWAYS SET
+          
+          await saveUserToFirestore(updatedProfile);
+          console.log('[resetUserPassword] ✅ Password updated in Firestore');
+          
+          if (userProfile?.email?.toLowerCase() === key) {
+            setUserProfileState(updatedProfile);
+          }
+          updated = true;
+        }
+      } catch (firebaseErr) {
+        console.warn('[resetUserPassword] Firestore update failed:', firebaseErr);
+      }
+      
+      // ✅ Fall back to localStorage if Firestore unavailable or didn't find account
+      if (!updated) {
+        const profiles = getUserProfiles();
+        const profile = profiles[key];
+        if (profile) {
+          const updatedProfile = { ...profile, passwordHash: newHash }; // ✅ ALWAYS SET
+          
+          saveUserProfile(updatedProfile);
+          console.log('[resetUserPassword] ✅ Password updated in localStorage');
+          
+          if (userProfile?.email?.toLowerCase() === key) {
+            setUserProfileState(updatedProfile);
+          }
+          updated = true;
+        }
+      }
+      
+      if (!updated) {
+        return { success: false, message: 'No account found with this email.' };
+      }
+      
+      deleteOtpEntry(key);
+      return { success: true, message: 'Password reset successfully! You can now login with your new password.' };
+    } catch (err: any) {
+      console.error('[resetUserPassword] Error:', err);
+      return { success: false, message: err?.message || 'Failed to reset password. Please try again.' };
     }
-    
-    if (!updated) return { success: false, message: 'No account found with this email.' };
-    deleteOtpEntry(key);
-    return { success: true, message: 'Password reset successfully! You can now login with your new password.' };
   };
 
   const logoutUser = () => {
