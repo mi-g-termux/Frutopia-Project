@@ -255,22 +255,22 @@ export const FavoritesMenu = ({
                   </div>
 
                   {/* Character Icon / Emoji Image circle container */}
-                  <div className="h-32 bg-slate-50 rounded-xl flex items-center justify-center relative mb-4 overflow-hidden select-none group-hover:bg-slate-100 transition-colors">
-                    {prod.image && (prod.image.startsWith('http') || prod.image.startsWith('data:') || prod.image.startsWith('/')) ? (
+                  {prod.image && (prod.image.startsWith('http') || prod.image.startsWith('data:') || prod.image.startsWith('/')) ? (
+                    <div className="h-36 bg-white rounded-xl flex items-center justify-center relative mb-4 overflow-hidden select-none border border-slate-100">
                       <img
                         src={prod.image}
                         alt={prod.name}
-                        className="w-full h-full object-cover transform group-hover:scale-110 transition-all duration-300"
+                        className="w-full h-full object-contain p-2 transform group-hover:scale-105 transition-all duration-300"
                         onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
                       />
-                    ) : (
+                    </div>
+                  ) : (
+                    <div className="h-36 bg-slate-50 rounded-xl flex items-center justify-center relative mb-4 overflow-hidden select-none group-hover:bg-slate-100 transition-colors">
                       <div className="text-6xl transform group-hover:scale-110 transition-all duration-300">
                         {prod.image || '🍎'}
                       </div>
-                    )}
-                    {/* Subtle design pattern inside image slot */}
-                    <div className="absolute inset-0 bg-sleek-pattern opacity-10 pointer-events-none"></div>
-                  </div>
+                    </div>
+                  )}
 
                   {/* Title and Description */}
                   <div className="flex-1 mb-4">

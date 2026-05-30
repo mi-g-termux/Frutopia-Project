@@ -1286,19 +1286,68 @@ const DEFAULT_ADMIN_ORDER_ALERT = `<!DOCTYPE html>
   const sendEmailVerification = async (email: string): Promise<{ success: boolean; message: string }> => {
     const evCfg = emailVerificationSettings;
     if (!evCfg?.isEnabled) return { success: true, message: 'Email verification not required.' };
+
+    // Check SMTP is configured before promising an email will arrive
+    if (!smtpSettings?.host || !smtpSettings?.email || !smtpSettings?.password) {
+      console.warn('[sendEmailVerification] SMTP not configured — verification email cannot be sent.');
+      return { success: false, message: 'Email service is not configured. Please contact the store admin to set up SMTP.' };
+    }
+
     const token = Array.from(crypto.getRandomValues(new Uint8Array(24))).map(b => b.toString(16).padStart(2, '0')).join('');
     const expiryHours = evCfg.tokenExpiryHours || 24;
     const evStore = getEvStore();
     evStore[email.toLowerCase()] = { token, expiresAt: Date.now() + expiryHours * 3600_000, verified: false };
     localStorage.setItem(EV_KEY, JSON.stringify(evStore));
+
+    const storeName = siteSettings?.websiteName || 'Our Store';
+    const verifyUrl = `${window.location.origin}/?verify_token=${token}&verify_email=${encodeURIComponent(email)}`;
+    const html = `
+      <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;max-width:520px;margin:auto;background:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #e2e8f0;">
+        <div style="background:linear-gradient(135deg,#10b981,#059669);padding:32px 24px;text-align:center;">
+          <h1 style="color:#fff;margin:0;font-size:24px;font-weight:800;">${storeName}</h1>
+          <p style="color:#d1fae5;margin:8px 0 0;font-size:14px;">Email Verification</p>
+        </div>
+        <div style="padding:32px 24px;">
+          <h2 style="color:#0f172a;margin:0 0 12px;font-size:18px;">Verify your email address</h2>
+          <p style="color:#475569;font-size:14px;line-height:1.6;margin:0 0 24px;">
+            Thanks for signing up! Click the button below to verify your email address. This link expires in <strong>${expiryHours} hours</strong>.
+          </p>
+          <div style="text-align:center;margin:28px 0;">
+            <a href="${verifyUrl}" style="display:inline-block;background:#10b981;color:#fff;text-decoration:none;padding:14px 32px;border-radius:8px;font-weight:700;font-size:15px;">
+              ✅ Verify My Email
+            </a>
+          </div>
+          <p style="color:#94a3b8;font-size:12px;text-align:center;margin:20px 0 0;">
+            If you didn't create an account, you can safely ignore this email.
+          </p>
+        </div>
+        <div style="background:#f8fafc;padding:16px 24px;text-align:center;border-top:1px solid #e2e8f0;">
+          <p style="color:#94a3b8;font-size:11px;margin:0;">${storeName} · Sent to ${email}</p>
+        </div>
+      </div>`;
+
     try {
-      await fetch('/api/send-verification', {
+      const res = await fetch('/api/send-email', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, token, storeName: siteSettings?.websiteName || 'E-Shop', smtpSettings }),
+        body: JSON.stringify({
+          to: email,
+          subject: `Verify your email — ${storeName}`,
+          html,
+          smtpSettings: { ...smtpSettings, fromName: smtpSettings.fromName || storeName },
+        }),
       });
-    } catch { console.log(`[EMAIL VERIFY DEV] Token for ${email}: ${token}`); }
-    return { success: true, message: `Verification email sent to ${email}.` };
+      const data = await res.json().catch(() => ({}));
+      if (data?.simulated) {
+        // SMTP skipped on server side — inform admin
+        console.warn('[sendEmailVerification] SMTP not active on server. Token:', token);
+        return { success: false, message: 'SMTP is not active. Configure SMTP in Admin → Settings → SMTP to send verification emails.' };
+      }
+    } catch (err) {
+      console.error('[sendEmailVerification] API call failed:', err);
+      return { success: false, message: 'Could not send verification email. Check your internet connection or SMTP settings.' };
+    }
+    return { success: true, message: `Verification email sent to ${email}. Please check your inbox.` };
   };
 
   const verifyEmailToken = (email: string, token: string): { success: boolean; message: string } => {
