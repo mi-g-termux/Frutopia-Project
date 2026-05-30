@@ -2551,6 +2551,7 @@ await saveSiteSettings(JSON.parse(JSON.stringify(current)));
  src={logoVal}
  alt="logo preview"
  className="h-full w-auto max-w-full object-contain"
+ style={{ imageRendering: 'crisp-edges' }}
  onError={(e) => { (e.target as HTMLImageElement).style.display ='none'; }}
  /> </div> )}
  </div> <p className="text-[9px] text-slate-400 mt-1">Preview shows the exact aspect ratio used on the checkout payment button.</p> </div> </div> </div> ))}

@@ -1488,14 +1488,15 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
                         <img
                           src={logoUrl}
                           alt={visibleLabel || opt.fallbackLabel}
-                          className="h-14 w-auto max-w-[200px] object-contain flex-shrink-0"
+                          className="h-12 sm:h-14 w-auto max-w-[120px] sm:max-w-[180px] object-contain flex-shrink-0 image-rendering-crisp"
+                          style={{ imageRendering: 'crisp-edges', filter: 'contrast(1.05)' }}
                           loading="lazy"
                           onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
                         />
                       ) : (
                         <span className="flex-shrink-0">{opt.icon}</span>
                       )}
-                      {visibleLabel && <span className="truncate">{visibleLabel}</span>}
+                      {visibleLabel && <span className="truncate text-xs sm:text-sm">{visibleLabel}</span>}
                     </label>
                   );})}
                 </div>
