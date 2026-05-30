@@ -24,26 +24,31 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       : 'https://securepay.sslcommerz.com';
 
     const origin = getOrigin(req);
+    // SSLCommerz requires total_amount as a plain decimal number string (no trailing zeros beyond 2dp)
+    const amountFormatted = parseFloat(String(amount)).toFixed(2);
+
     const form = new URLSearchParams({
       store_id: creds.storeId,
       store_passwd: creds.storePass,
-      total_amount: String(amount),
+      total_amount: amountFormatted,
       currency: 'BDT',
       tran_id: orderId,
-      success_url: `${origin}/api/sslcommerz/ipn?status=success&orderId=${orderId}`,
-      fail_url: `${origin}/api/sslcommerz/ipn?status=fail&orderId=${orderId}`,
-      cancel_url: `${origin}/api/sslcommerz/ipn?status=cancel&orderId=${orderId}`,
-      ipn_url: `${origin}/api/sslcommerz/ipn`,
-      cus_name: customer.name || 'Customer',
-      cus_email: customer.email || 'noreply@example.com',
-      cus_phone: customer.phone || '01700000000',
-      cus_add1: customer.address || 'N/A',
-      cus_city: customer.city || 'Dhaka',
+      success_url: `${origin}/api/sslcommerz/ipn?status=success&orderId=${encodeURIComponent(orderId)}`,
+      fail_url:    `${origin}/api/sslcommerz/ipn?status=fail&orderId=${encodeURIComponent(orderId)}`,
+      cancel_url:  `${origin}/api/sslcommerz/ipn?status=cancel&orderId=${encodeURIComponent(orderId)}`,
+      ipn_url:     `${origin}/api/sslcommerz/ipn`,
+      cus_name:    customer.name    || 'Customer',
+      cus_email:   customer.email   || 'noreply@example.com',
+      cus_phone:   customer.phone   || '01700000000',
+      cus_add1:    customer.address || 'N/A',
+      cus_city:    customer.city    || 'Dhaka',
       cus_country: customer.country || 'Bangladesh',
-      shipping_method: 'NO',
-      product_name: productName,
+      shipping_method:  'NO',
+      product_name:     productName,
       product_category: 'general',
-      product_profile: 'general',
+      product_profile:  'general',
+      num_of_item:      '1',       // required by SSLCommerz API
+      value_a:          orderId,   // echo back for IPN cross-check
     });
 
     const r = await fetch(`${base}/gwprocess/v4/api.php`, {

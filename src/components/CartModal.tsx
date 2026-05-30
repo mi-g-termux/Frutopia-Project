@@ -221,28 +221,17 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
     if (successStatuses.some(Boolean)) {
       completePendingOrder();
     } else if (paypalStatus === 'approved') {
-      const paypalOrderId     = localStorage.getItem('qf_paypal_order_id') || params.get('token') || '';
-      const paypalClientId    = localStorage.getItem('qf_paypal_client_id') || '';
-      const paypalClientSecret = localStorage.getItem('qf_paypal_client_secret') || '';
-      const paypalSandbox     = localStorage.getItem('qf_paypal_sandbox') !== 'false';
+      const paypalOrderId = localStorage.getItem('qf_paypal_order_id') || params.get('token') || '';
 
-      if (paypalOrderId && paypalClientId) {
+      if (paypalOrderId) {
         fetch('/api/paypal/capture-order', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            orderId: paypalOrderId,
-            clientId: paypalClientId,
-            clientSecret: paypalClientSecret,
-            sandboxMode: paypalSandbox,
-          }),
+          body: JSON.stringify({ orderId: paypalOrderId }),
         })
           .then(r => r.json())
           .then((data: any) => {
             localStorage.removeItem('qf_paypal_order_id');
-            localStorage.removeItem('qf_paypal_client_id');
-            localStorage.removeItem('qf_paypal_client_secret');
-            localStorage.removeItem('qf_paypal_sandbox');
             if (data.success) {
               completePendingOrder(`PayPal (txn: ${data.transactionId})`);
             } else {
@@ -622,10 +611,10 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
               }),
             });
             const data = await res.json() as any;
-            if (data.nagadURL) {
-              localStorage.setItem('qf_pending_order', JSON.stringify({ ...orderData, paymentMethod: 'Nagad (Auto)', paymentStatus: 'Paid' }));
+            if (data.callBackUrl) {
+              localStorage.setItem('qf_pending_order', JSON.stringify({ ...orderData, paymentMethod: 'Nagad (Auto)', paymentStatus: 'Pending' }));
               localStorage.setItem('qf_pending_email', email.trim().toLowerCase());
-              window.location.href = data.nagadURL;
+              window.location.href = data.callBackUrl;
               return;
             }
           } catch {
@@ -642,9 +631,6 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
               body: JSON.stringify({
                 amount: grandTotal.toFixed(2),
                 currency: (siteSettings?.currency || 'USD').toUpperCase(),
-                clientId: paymentSettings.paypalClientId,
-                clientSecret: paymentSettings.paypalClientSecret || '',
-                sandboxMode: paymentSettings.paypalSandboxMode ?? true,
               }),
             });
             const data = await res.json() as any;
@@ -652,9 +638,6 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
               localStorage.setItem('qf_pending_order', JSON.stringify({ ...orderData, paymentMethod: 'PayPal', paymentStatus: 'Paid' }));
               localStorage.setItem('qf_pending_email', email.trim().toLowerCase());
               localStorage.setItem('qf_paypal_order_id', data.orderId);
-              localStorage.setItem('qf_paypal_client_id', paymentSettings.paypalClientId);
-              localStorage.setItem('qf_paypal_client_secret', paymentSettings.paypalClientSecret || '');
-              localStorage.setItem('qf_paypal_sandbox', String(paymentSettings.paypalSandboxMode ?? true));
               window.location.href = data.approvalUrl;
               return;
             }
@@ -899,21 +882,19 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
       // ── STRIPE ───────────────────────────────────────────────────────────
       if (methodLabel.startsWith('Stripe') && paymentSettings.stripeSecretKey) {
         setAutoStep(3);
-        // Step 1: create PaymentIntent
+        // Step 1: create PaymentIntent (creds read server-side from Firestore)
         const piRes = await fetch('/api/stripe/create-payment-intent', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             amount: orderInfo.total,
             currency: (siteSettings?.currency || 'USD').toLowerCase(),
-            stripeSecretKey: paymentSettings.stripeSecretKey,
-            sandboxMode: paymentSettings.stripeSandboxMode ?? true,
           }),
         });
         const piData = await piRes.json() as any;
         if (!piData.clientSecret) throw new Error(piData.error || 'Stripe PaymentIntent failed.');
 
-        // Step 2: create PaymentMethod from card details via Stripe API
+        // Step 2: tokenise card via Stripe.js using the PUBLIC key (safe to use client-side)
         const pmRes = await fetch('https://api.stripe.com/v1/payment_methods', {
           method: 'POST',
           headers: {
@@ -939,7 +920,6 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
           body: JSON.stringify({
             paymentIntentId: piData.paymentIntentId,
             paymentMethodId: pmData.id,
-            stripeSecretKey: paymentSettings.stripeSecretKey,
           }),
         });
         const confData = await confRes.json() as any;
@@ -957,15 +937,11 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
           body: JSON.stringify({
             amount: orderInfo.total,
             currency: (siteSettings?.currency || 'USD').toUpperCase(),
-            clientId: paymentSettings.paypalClientId,
-            clientSecret: paymentSettings.paypalClientSecret || '',
-            sandboxMode: paymentSettings.paypalSandboxMode ?? true,
           }),
         });
         const orderData = await orderRes.json() as any;
         if (!orderData.orderId) throw new Error(orderData.error || 'PayPal order creation failed.');
 
-        // Store pending order + PayPal orderId so callback page can capture it
         localStorage.setItem('qf_pending_order', JSON.stringify({
           ...orderInfo,
           paymentMethod: 'PayPal',
@@ -973,11 +949,7 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
         }));
         localStorage.setItem('qf_pending_email', (orderInfo.email || '').trim().toLowerCase());
         localStorage.setItem('qf_paypal_order_id', orderData.orderId);
-        localStorage.setItem('qf_paypal_client_id', paymentSettings.paypalClientId);
-        localStorage.setItem('qf_paypal_client_secret', paymentSettings.paypalClientSecret || '');
-        localStorage.setItem('qf_paypal_sandbox', String(paymentSettings.paypalSandboxMode ?? true));
 
-        // Redirect buyer to PayPal approval page
         window.location.href = orderData.approvalUrl;
         return;
       }

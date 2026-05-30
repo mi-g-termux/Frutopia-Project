@@ -2394,37 +2394,58 @@ const DEFAULT_ADMIN_ORDER_ALERT = `<!DOCTYPE html>
 
   // ── Tawk.to Live Chat ──────────────────────────────────────────────────────
   const triggerTawkToLoader = () => {
-    const ss = supportSettings; // capture from current closure
+    const ss = supportSettings;
     if (!ss?.isEnabled || !ss.tawkToId) return;
-    // Cleanly remove any previously-injected widget / scripts
-    document.querySelectorAll('script[src*="embed.tawk.to"]').forEach(n => n.remove());
-    document.querySelectorAll('iframe[src*="tawk.to"], [class*="tawk-"], [id*="tawk"]').forEach(n => n.remove());
-    // Remove tawk shadow-root container
-    document.querySelectorAll('[id^="tawk-"]').forEach(n => n.remove());
-    try { delete (window as any).Tawk_API; delete (window as any).Tawk_LoadStart; } catch {}
 
-    // Accept full URL, "propertyId/widgetId", or just "propertyId"
+    // Strip any full URL prefix the admin may have pasted
     const raw = ss.tawkToId.trim()
       .replace(/^https?:\/\/embed\.tawk\.to\//i, '')
       .replace(/^https?:\/\/tawk\.to\//i, '')
       .replace(/\/+$/, '');
-    // tawk.to requires "propertyId/widgetId" — never use "default" as widgetId
-    // If admin gave only the property ID (no slash), append /1 as the default widget
-    const path = raw.includes('/') ? raw : `${raw}/1`;
+
+    // Tawk.to path MUST be "propertyId/widgetId" — both parts are required.
+    // A widgetId looks like "1gwxxxxx" (not just "1").
+    // If the admin only entered a propertyId without a widgetId, abort and warn.
+    if (!raw.includes('/')) {
+      console.warn(
+        '[Tawk.to] Invalid ID format. Please enter the full "PropertyID/WidgetID" ' +
+        '(e.g. 642abc123/1gwXXXXX) found in Tawk.to Admin → Chat Widget → Direct Chat Link.'
+      );
+      return;
+    }
+
+    const [propertyId, widgetId] = raw.split('/');
+    // Sanity-check: widgetId should not be a bare single digit
+    if (!propertyId || !widgetId || widgetId.length < 4) {
+      console.warn(
+        '[Tawk.to] Widget ID looks wrong ("' + widgetId + '"). ' +
+        'Copy the full Direct Chat Link from Tawk.to Admin → Chat Widget.'
+      );
+      return;
+    }
+
+    // Clean up any previously injected widget
+    document.querySelectorAll('script[src*="embed.tawk.to"]').forEach(n => n.remove());
+    document.querySelectorAll('iframe[src*="tawk.to"], [class*="tawk-"], [id*="tawk"]').forEach(n => n.remove());
+    document.querySelectorAll('[id^="tawk-"]').forEach(n => n.remove());
+    try { delete (window as any).Tawk_API; delete (window as any).Tawk_LoadStart; } catch {}
 
     (window as any).Tawk_API = (window as any).Tawk_API || {};
     (window as any).Tawk_LoadStart = new Date();
 
     const s = document.createElement('script');
     s.async = true;
-    s.src = `https://embed.tawk.to/${path}`;
+    s.src = `https://embed.tawk.to/${propertyId}/${widgetId}`;
     s.charset = 'UTF-8';
     s.setAttribute('crossorigin', '*');
-    s.onerror = () => console.warn('[Tawk.to] Script failed to load. Check your Property ID/Widget ID in Admin → Support Settings.');
+    s.onerror = () => console.warn(
+      '[Tawk.to] Script failed to load. Verify your Property ID and Widget ID ' +
+      'in Admin → Support Settings. Format: "propertyId/widgetId".'
+    );
     const firstScript = document.getElementsByTagName('script')[0];
-    if (firstScript && firstScript.parentNode) firstScript.parentNode.insertBefore(s, firstScript);
+    if (firstScript?.parentNode) firstScript.parentNode.insertBefore(s, firstScript);
     else document.head.appendChild(s);
-    console.log('[Tawk.to] Widget loading from path:', path);
+    console.log('[Tawk.to] Loading widget:', `${propertyId}/${widgetId}`);
   };
 
   // Re-run loader whenever supportSettings changes (avoids stale closure)
