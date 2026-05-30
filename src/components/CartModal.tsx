@@ -137,7 +137,7 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
     const bkashStatus   = params.get('bkash');
     const nagadStatus   = params.get('nagad');
     const paypalStatus  = params.get('paypal');
-    const sslStatus     = params.get('sslcommerz');
+    const sslStatus     = params.get('sslcz') || params.get('sslcommerz');
     const gatewayStatus = params.get('status');
     const bkashPaymentID = params.get('paymentID') || params.get('paymentId') || '';
 
@@ -630,6 +630,151 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
             }
           } catch {
             // fall through to simulation
+          }
+        }
+
+        // ── PayPal real API redirect ──────────────────────────────────────
+        if (paymentMethod === 'PayPal' && paymentSettings.paypalClientId) {
+          try {
+            const res = await fetch('/api/paypal/create-order', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                amount: grandTotal.toFixed(2),
+                currency: (siteSettings?.currency || 'USD').toUpperCase(),
+                clientId: paymentSettings.paypalClientId,
+                clientSecret: paymentSettings.paypalClientSecret || '',
+                sandboxMode: paymentSettings.paypalSandboxMode ?? true,
+              }),
+            });
+            const data = await res.json() as any;
+            if (data.approvalUrl) {
+              localStorage.setItem('qf_pending_order', JSON.stringify({ ...orderData, paymentMethod: 'PayPal', paymentStatus: 'Paid' }));
+              localStorage.setItem('qf_pending_email', email.trim().toLowerCase());
+              localStorage.setItem('qf_paypal_order_id', data.orderId);
+              localStorage.setItem('qf_paypal_client_id', paymentSettings.paypalClientId);
+              localStorage.setItem('qf_paypal_client_secret', paymentSettings.paypalClientSecret || '');
+              localStorage.setItem('qf_paypal_sandbox', String(paymentSettings.paypalSandboxMode ?? true));
+              window.location.href = data.approvalUrl;
+              return;
+            }
+            throw new Error(data.error || 'PayPal order creation failed');
+          } catch (err: any) {
+            toast.error(err?.message || 'Could not start PayPal payment.');
+            return;
+          }
+        }
+
+        // ── Stripe real API (card details collected in auto portal) ───────
+        // Stripe requires card details — open the auto portal to collect them
+        if (paymentMethod === 'Stripe' && paymentSettings.stripeSecretKey) {
+          // Store order data so the auto portal can finalise it after card entry
+          localStorage.setItem('qf_pending_order', JSON.stringify({ ...orderData, paymentMethod: 'Stripe', paymentStatus: 'Pending' }));
+          localStorage.setItem('qf_pending_email', email.trim().toLowerCase());
+          setIsAutoPortalOpen(true);
+          setAutoStep(0);
+          return;
+        }
+
+        // ── SSLCommerz real API redirect ─────────────────────────────────
+        if (paymentMethod === 'SSLCommerz' && paymentSettings.sslCommerzStoreId) {
+          try {
+            const orderId = `QF-${Date.now()}`;
+            const res = await fetch('/api/sslcommerz/create-payment', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                amount: grandTotal.toFixed(2),
+                orderId,
+                productName: siteSettings?.storeName || 'Order',
+                customer: {
+                  name: customerName,
+                  email,
+                  phone,
+                  address,
+                  city,
+                  country: 'Bangladesh',
+                },
+              }),
+            });
+            const data = await res.json() as any;
+            if (data.redirectUrl) {
+              localStorage.setItem('qf_pending_order', JSON.stringify({ ...orderData, paymentMethod: 'SSLCommerz', paymentStatus: 'Pending' }));
+              localStorage.setItem('qf_pending_email', email.trim().toLowerCase());
+              window.location.href = data.redirectUrl;
+              return;
+            }
+            // If API call failed, show error instead of silently simulating
+            throw new Error(data.error || 'SSLCommerz session failed');
+          } catch (err: any) {
+            toast.error(err?.message || 'Could not start SSLCommerz payment.');
+            return;
+          }
+        }
+
+        // ── Razorpay real API redirect ───────────────────────────────────
+        if (paymentMethod === 'Razorpay' && paymentSettings.razorpayKeyId) {
+          try {
+            const res = await fetch('/api/razorpay/create-order', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                amount: grandTotal.toFixed(2),
+                currency: siteSettings?.currency || 'BDT',
+                receipt: `QF-${Date.now()}`,
+              }),
+            });
+            const data = await res.json() as any;
+            if (data.orderId && data.keyId) {
+              const orderId = data.orderId;
+              localStorage.setItem('qf_pending_order', JSON.stringify({ ...orderData, paymentMethod: 'Razorpay', paymentStatus: 'Pending' }));
+              localStorage.setItem('qf_pending_email', email.trim().toLowerCase());
+              // Load Razorpay checkout script and open
+              const loadScript = (): Promise<void> =>
+                new Promise((resolve, reject) => {
+                  if ((window as any).Razorpay) return resolve();
+                  const s = document.createElement('script');
+                  s.src = 'https://checkout.razorpay.com/v1/checkout.js';
+                  s.onload = () => resolve();
+                  s.onerror = () => reject(new Error('Failed to load Razorpay'));
+                  document.body.appendChild(s);
+                });
+              await loadScript();
+              const rzp = new (window as any).Razorpay({
+                key: data.keyId,
+                amount: data.amount,
+                currency: data.currency,
+                order_id: orderId,
+                name: siteSettings?.storeName || 'Order',
+                prefill: { name: customerName, email, contact: phone },
+                handler: async (resp: any) => {
+                  const v = await fetch('/api/razorpay/verify-payment', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      razorpay_order_id: resp.razorpay_order_id,
+                      razorpay_payment_id: resp.razorpay_payment_id,
+                      razorpay_signature: resp.razorpay_signature,
+                    }),
+                  }).then(x => x.json());
+                  if (!v?.success) { toast.error('Razorpay signature verification failed.'); return; }
+                  const pending = JSON.parse(localStorage.getItem('qf_pending_order') || '{}');
+                  const placed = await placeOrder({ ...pending, paymentStatus: 'Paid', transactionId: resp.razorpay_payment_id });
+                  localStorage.removeItem('qf_pending_order');
+                  localStorage.removeItem('qf_pending_email');
+                  toast.success(`Payment confirmed. Order: ${placed.orderNumber}`);
+                  setPlacedInvoiceOrder(placed);
+                  clearCart();
+                },
+                modal: { ondismiss: () => toast.error('Razorpay payment cancelled.') },
+              });
+              rzp.open();
+              return;
+            }
+            throw new Error(data.error || 'Razorpay order creation failed');
+          } catch (err: any) {
+            toast.error(err?.message || 'Could not start Razorpay payment.');
+            return;
           }
         }
 
