@@ -370,6 +370,7 @@ export interface EmailVerificationSettings {
   isEnabled: boolean;
   requireVerificationBeforeOrder: boolean;
   tokenExpiryHours: number;
+  otpSignInVerification?: boolean; // NEW: Require OTP verification when users sign in
 }
 
 export interface DeliveryZone {

@@ -126,6 +126,14 @@ export const UserAuthModal = ({ isOpen, onClose, defaultTab = 'signin' }: UserAu
   const [regResendCountdown, setRegResendCountdown] = useState(0);
   const regCountdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Sign-In OTP Verification (NEW)
+  const [signInOtpRequired, setSignInOtpRequired] = useState(false);
+  const [signInOtpEmail, setSignInOtpEmail] = useState('');
+  const [signInOtpCode, setSignInOtpCode] = useState('');
+  const [signInOtpResendCount, setSignInOtpResendCount] = useState(0);
+  const [signInOtpError, setSignInOtpError] = useState('');
+  const [signInOtpLoading, setSignInOtpLoading] = useState(false);
+
   // reCAPTCHA state (v2 checkbox)
   const [recaptchaToken, setRecaptchaToken] = useState<string | null>(null);
   const recaptchaRef = useRef<HTMLDivElement>(null);
@@ -237,6 +245,50 @@ export const UserAuthModal = ({ isOpen, onClose, defaultTab = 'signin' }: UserAu
     setLoading(true);
     try {
       const result = await loginUser(siEmail, siPass);
+      
+      // NEW: Check if OTP Sign-In verification is enabled
+      if (result.success && emailVerificationSettings?.otpSignInVerification) {
+        // Generate OTP code
+        const otpCode = String(Math.floor(100000 + Math.random() * 900000));
+        
+        // Save OTP to sessionStorage with expiry
+        sessionStorage.setItem(`signin_otp_${siEmail}`, JSON.stringify({
+          code: otpCode,
+          expiresAt: Date.now() + (emailVerificationSettings.tokenExpiryHours * 3600000),
+          email: siEmail,
+        }));
+
+        // Send OTP email
+        try {
+          await fetch('/api/send-email', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              to: siEmail,
+              subject: 'Your Sign-In OTP Code',
+              template: 'otp-signin',
+              data: {
+                code: otpCode,
+                expiryHours: emailVerificationSettings.tokenExpiryHours,
+                storeName: siteSettings?.websiteName || 'Store',
+              },
+            }),
+          });
+        } catch (err) {
+          console.error('Failed to send OTP email:', err);
+        }
+
+        // Show OTP verification screen
+        setSignInOtpRequired(true);
+        setSignInOtpEmail(siEmail);
+        setSignInOtpCode('');
+        setSignInOtpError('');
+        setLoading(false);
+        showPop('success', 'OTP sent to your email. Please verify to sign in.');
+        return;
+      }
+
+      // Original login flow
       if (result.success) {
         showPop('success', result.message);
         setTimeout(onClose, 1500);
@@ -247,6 +299,93 @@ export const UserAuthModal = ({ isOpen, onClose, defaultTab = 'signin' }: UserAu
       showPop('error', 'Something went wrong. Please try again.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  // NEW: OTP Sign-In Verification Handler
+  const handleSignInOtpVerify = async () => {
+    if (!signInOtpCode.trim() || signInOtpCode.length !== 6) {
+      setSignInOtpError('Please enter a valid 6-digit code');
+      return;
+    }
+
+    setSignInOtpLoading(true);
+    setSignInOtpError('');
+
+    try {
+      const storedOtp = sessionStorage.getItem(`signin_otp_${signInOtpEmail}`);
+      
+      if (!storedOtp) {
+        setSignInOtpError('OTP expired. Please sign in again.');
+        setSignInOtpLoading(false);
+        return;
+      }
+
+      const { code, expiresAt } = JSON.parse(storedOtp);
+
+      if (Date.now() > expiresAt) {
+        setSignInOtpError('OTP has expired. Please request a new one.');
+        sessionStorage.removeItem(`signin_otp_${signInOtpEmail}`);
+        setSignInOtpLoading(false);
+        return;
+      }
+
+      if (signInOtpCode !== code) {
+        setSignInOtpError('Invalid OTP code. Please try again.');
+        setSignInOtpLoading(false);
+        return;
+      }
+
+      // OTP is valid - complete login
+      sessionStorage.removeItem(`signin_otp_${signInOtpEmail}`);
+      setSignInOtpRequired(false);
+      setSignInOtpEmail('');
+      setSignInOtpCode('');
+      setSignInOtpResendCount(0);
+      setSiEmail('');
+      setSiPass('');
+      setLoading(false);
+
+      showPop('success', 'OTP verified! Signed in successfully.');
+      setTimeout(onClose, 1500);
+    } catch (err) {
+      setSignInOtpError('Verification failed. Please try again.');
+      setSignInOtpLoading(false);
+    }
+  };
+
+  // NEW: OTP Resend Handler
+  const handleSignInOtpResend = async () => {
+    setSignInOtpResendCount(prev => prev + 1);
+    setSignInOtpError('');
+    
+    try {
+      const otpCode = String(Math.floor(100000 + Math.random() * 900000));
+      
+      sessionStorage.setItem(`signin_otp_${signInOtpEmail}`, JSON.stringify({
+        code: otpCode,
+        expiresAt: Date.now() + ((emailVerificationSettings?.tokenExpiryHours || 24) * 3600000),
+        email: signInOtpEmail,
+      }));
+
+      await fetch('/api/send-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          to: signInOtpEmail,
+          subject: 'Your Sign-In OTP Code',
+          template: 'otp-signin',
+          data: {
+            code: otpCode,
+            expiryHours: emailVerificationSettings?.tokenExpiryHours || 24,
+            storeName: siteSettings?.websiteName || 'Store',
+          },
+        }),
+      }).catch(err => console.error('Resend OTP error:', err));
+
+      showPop('success', 'OTP resent to your email.');
+    } catch (err) {
+      setSignInOtpError('Failed to resend OTP. Please try again.');
     }
   };
 
@@ -494,7 +633,84 @@ export const UserAuthModal = ({ isOpen, onClose, defaultTab = 'signin' }: UserAu
 
           {/* SIGN IN FORM */}
           {!isUserLoggedIn && tab === 'signin' && (
-            <form onSubmit={handleSignIn} className="space-y-4">
+            <>
+              {signInOtpRequired ? (
+                // OTP Verification Screen (NEW)
+                <div className="space-y-4">
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-700">
+                    <p className="font-semibold">Enter Your OTP Code</p>
+                    <p className="text-xs mt-1">
+                      We sent a 6-digit code to <span className="font-mono font-bold">{signInOtpEmail}</span>
+                    </p>
+                  </div>
+
+                  <div>
+                    <label htmlFor="signin-otp" className="block text-[10px] font-bold uppercase text-slate-500 mb-1.5">
+                      6-Digit OTP Code
+                    </label>
+                    <input
+                      id="signin-otp"
+                      type="text"
+                      inputMode="numeric"
+                      maxLength={6}
+                      placeholder="000000"
+                      value={signInOtpCode}
+                      onChange={(e) => {
+                        const val = e.target.value.replace(/\D/g, '');
+                        setSignInOtpCode(val);
+                        setSignInOtpError('');
+                      }}
+                      autoComplete="off"
+                      className="w-full bg-slate-50 border border-slate-200 focus:border-blue-400 focus:ring-1 focus:ring-blue-400 rounded-lg px-3 py-2 text-lg font-bold text-center tracking-widest outline-none transition-all"
+                    />
+                    {signInOtpError && (
+                      <p className="text-xs text-red-600 font-semibold mt-1 flex items-center gap-1">
+                        <AlertCircle className="w-3.5 h-3.5" /> {signInOtpError}
+                      </p>
+                    )}
+                  </div>
+
+                  <button
+                    onClick={handleSignInOtpVerify}
+                    disabled={signInOtpLoading || signInOtpCode.length !== 6}
+                    className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white font-semibold uppercase text-xs rounded-lg transition-colors disabled:cursor-not-allowed"
+                  >
+                    {signInOtpLoading ? (
+                      <>
+                        <span className="w-4 h-4 border-2 border-white/50 border-t-white rounded-full animate-spin" /> Verifying...
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle className="w-4 h-4" /> Verify OTP
+                      </>
+                    )}
+                  </button>
+
+                  <button
+                    onClick={handleSignInOtpResend}
+                    disabled={signInOtpResendCount > 0 && signInOtpResendCount < 3}
+                    className="w-full text-xs text-center text-blue-600 hover:text-blue-700 font-semibold uppercase py-2 disabled:text-slate-400 transition-colors"
+                  >
+                    {signInOtpResendCount > 0 && signInOtpResendCount < 3
+                      ? `Resend in ${30 - (signInOtpResendCount * 10)}s`
+                      : 'Resend OTP'}
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setSignInOtpRequired(false);
+                      setSiEmail('');
+                      setSiPass('');
+                      sessionStorage.removeItem(`signin_otp_${signInOtpEmail}`);
+                    }}
+                    className="w-full text-xs text-center text-slate-500 hover:text-slate-700 font-semibold py-2 transition-colors"
+                  >
+                    Back to Sign In
+                  </button>
+                </div>
+              ) : (
+                // Normal Sign-In Form
+                <form onSubmit={handleSignIn} className="space-y-4">
               <div>
                 <label htmlFor="auth-signin-email" className="block text-[10px] font-bold uppercase text-slate-500 mb-1.5">Email Address</label>
                 <div className="relative">
@@ -556,7 +772,9 @@ export const UserAuthModal = ({ isOpen, onClose, defaultTab = 'signin' }: UserAu
               )}
 
               <p className="text-center text-xs text-slate-400">Don't have an account? <button type="button" onClick={() => setTab('signup')} className="text-emerald-600 font-bold hover:underline">Sign Up</button></p>
-            </form>
+                </form>
+              )}
+            </>
           )}
 
           {/* FORGOT PASSWORD PANEL */}

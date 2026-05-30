@@ -429,7 +429,7 @@ export function saveDeliveryZones(zones: DeliveryZone[]): void {
 }
 
 export const DEFAULT_EMAIL_VERIFICATION_SETTINGS: EmailVerificationSettings = {
-  isEnabled: false, requireVerificationBeforeOrder: false, tokenExpiryHours: 24,
+  isEnabled: false, requireVerificationBeforeOrder: false, tokenExpiryHours: 24, otpSignInVerification: false,
 };
 
 export const DEFAULT_REVIEWS: Review[] = [
