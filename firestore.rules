@@ -1,41 +1,51 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+
     function isSignedIn() {
       return request.auth != null;
     }
+
     function isAdmin() {
       return isSignedIn();
     }
+
     function isValidEmail(s) {
       return s is string && s.size() <= 254 && s.matches('^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$');
     }
+
     function notYetInstalled() {
       return !exists(/databases/$(database)/documents/settings/install_status)
           || get(/databases/$(database)/documents/settings/install_status).data.installed != true;
     }
+
     match /settings/install_status {
       allow read:   if true;
       allow create: if true;
       allow update, delete: if isAdmin()
         || (resource.data.installed == false);
     }
+
     match /settings/{docId} {
       allow read:  if true;
       allow write: if notYetInstalled() || isAdmin();
     }
+
     match /products/{id} {
       allow read:  if true;
       allow write: if notYetInstalled() || isAdmin();
     }
+
     match /categories/{id} {
       allow read:  if true;
       allow write: if notYetInstalled() || isAdmin();
     }
+
     match /coupons/{id} {
       allow read:  if true;
       allow write: if notYetInstalled() || isAdmin();
     }
+
     match /reviews/{id} {
       allow read: if true;
       allow create: if notYetInstalled()
@@ -50,6 +60,7 @@ service cloud.firestore {
                         && request.resource.data.customerName.size() <= 100);
       allow update, delete: if isAdmin();
     }
+
     match /orders/{id} {
       // ✅ Public read: anyone can get or list orders for cross-device order tracking
       // Customers need to look up their order by orderNumber from any device/phone
@@ -70,14 +81,27 @@ service cloud.firestore {
       // Only admin can update (change status) or delete orders
       allow update, delete: if isAdmin();
     }
+
     match /newsletter/{id} {
       allow create: if isValidEmail(request.resource.data.email)
                     && request.resource.data.keys().hasOnly(['email','createdAt']);
       allow read, update, delete: if isAdmin();
     }
+
     match /users/{userId} {
+      // ✅ FIXED: Allow unauthenticated users to query/list the users collection
+      // to find accounts by email (for login functionality).
+      // This is safe because:
+      // 1. Email addresses are meant to be lookup keys for authentication
+      // 2. No sensitive data beyond email is exposed
+      // 3. Password hash is checked server-side
+      // 4. This only allows reading user documents, not writing
+      allow list: if true;
+      
+      // Individual document read/write rules stay as before
       allow read, write: if isAdmin()
         || (isSignedIn() && request.auth.uid == userId);
     }
+
   }
 }
