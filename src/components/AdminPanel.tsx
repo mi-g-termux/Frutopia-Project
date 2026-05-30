@@ -397,6 +397,10 @@ export const AdminPanel: React.FC = () => {
  const [brandBkashAutoLogo, setBrandBkashAutoLogo] = useState(paymentSettings.bKashAutoLogoImageUrl ??'');
  const [brandNagadAutoName, setBrandNagadAutoName] = useState(paymentSettings.nagadAutoDisplayName ??'');
  const [brandNagadAutoLogo, setBrandNagadAutoLogo] = useState(paymentSettings.nagadAutoLogoImageUrl ??'');
+ const [brandSslcommerzName, setBrandSslcommerzName] = useState(paymentSettings.sslCommerzDisplayName ??'');
+ const [brandSslcommerzLogo, setBrandSslcommerzLogo] = useState(paymentSettings.sslCommerzLogoImageUrl ??'');
+ const [brandRazorpayName, setBrandRazorpayName] = useState(paymentSettings.razorpayDisplayName ??'');
+ const [brandRazorpayLogo, setBrandRazorpayLogo] = useState(paymentSettings.razorpayLogoImageUrl ??'');
  // Optional subtext under each payment button (empty = hidden)
  const [subtextCod, setSubtextCod] = useState(paymentSettings.codSubtext ??'');
  const [subtextBkash, setSubtextBkash] = useState(paymentSettings.bKashSubtext ??'');
@@ -408,6 +412,8 @@ export const AdminPanel: React.FC = () => {
  const [subtextStripe, setSubtextStripe] = useState(paymentSettings.stripeSubtext ??'');
  const [subtextBkashAuto, setSubtextBkashAuto] = useState(paymentSettings.bKashAutoSubtext ??'');
  const [subtextNagadAuto, setSubtextNagadAuto] = useState(paymentSettings.nagadAutoSubtext ??'');
+ const [subtextSslcommerz, setSubtextSslcommerz] = useState(paymentSettings.sslCommerzSubtext ??'');
+ const [subtextRazorpay, setSubtextRazorpay] = useState(paymentSettings.razorpaySubtext ??'');
  // Button accent colors (hex)
  const [btnColorCod, setBtnColorCod] = useState(paymentSettings.codBtnColor ??'#16a34a');
  const [btnColorBkash, setBtnColorBkash] = useState(paymentSettings.bKashBtnColor ??'#e11d48');
@@ -419,6 +425,8 @@ export const AdminPanel: React.FC = () => {
  const [btnColorStripe, setBtnColorStripe] = useState(paymentSettings.stripeBtnColor ??'#4f46e5');
  const [btnColorBkashAuto, setBtnColorBkashAuto] = useState(paymentSettings.bKashAutoBtnColor ??'#be123c');
  const [btnColorNagadAuto, setBtnColorNagadAuto] = useState(paymentSettings.nagadAutoBtnColor ??'#d97706');
+ const [btnColorSslcommerz, setBtnColorSslcommerz] = useState(paymentSettings.sslCommerzBtnColor ??'#2563eb');
+ const [btnColorRazorpay, setBtnColorRazorpay] = useState(paymentSettings.razorpayBtnColor ??'#0055ff');
 
  const [payNagadAuto, setPayNagadAuto] = useState(paymentSettings.nagadAutoEnabled ?? false);
  const [payNagadMerchantId, setPayNagadMerchantId] = useState(paymentSettings.nagadMerchantId ??'');
@@ -1031,6 +1039,10 @@ await saveSiteSettings(JSON.parse(JSON.stringify(current)));
  bKashAutoLogoImageUrl: brandBkashAutoLogo,
  nagadAutoDisplayName: brandNagadAutoName,
  nagadAutoLogoImageUrl: brandNagadAutoLogo,
+ sslCommerzDisplayName: brandSslcommerzName,
+ sslCommerzLogoImageUrl: brandSslcommerzLogo,
+ razorpayDisplayName: brandRazorpayName,
+ razorpayLogoImageUrl: brandRazorpayLogo,
  codSubtext: subtextCod,
  bKashSubtext: subtextBkash,
  nagadSubtext: subtextNagad,
@@ -1041,6 +1053,8 @@ await saveSiteSettings(JSON.parse(JSON.stringify(current)));
  stripeSubtext: subtextStripe,
  bKashAutoSubtext: subtextBkashAuto,
  nagadAutoSubtext: subtextNagadAuto,
+ sslCommerzSubtext: subtextSslcommerz,
+ razorpaySubtext: subtextRazorpay,
  codBtnColor: btnColorCod,
  bKashBtnColor: btnColorBkash,
  nagadBtnColor: btnColorNagad,
@@ -1051,6 +1065,8 @@ await saveSiteSettings(JSON.parse(JSON.stringify(current)));
  stripeBtnColor: btnColorStripe,
  bKashAutoBtnColor: btnColorBkashAuto,
  nagadAutoBtnColor: btnColorNagadAuto,
+ sslCommerzBtnColor: btnColorSslcommerz,
+ razorpayBtnColor: btnColorRazorpay,
  };
  await savePaymentSettings(current);
  showSavedBanner('payment');
@@ -2515,6 +2531,8 @@ await saveSiteSettings(JSON.parse(JSON.stringify(current)));
  { label:'Rocket Manual', nameVal: brandRocketName, setName: setBrandRocketName, logoVal: brandRocketLogo, setLogo: setBrandRocketLogo, color:'purple' },
  { label:'Bank Transfer', nameVal: brandBankName, setName: setBrandBankName, logoVal: brandBankLogo, setLogo: setBrandBankLogo, color:'blue' },
  { label:'Manual Invoice', nameVal: brandCreditManualName, setName: setBrandCreditManualName, logoVal: brandCreditManualLogo, setLogo: setBrandCreditManualLogo, color:'emerald' },
+ { label:'SSLCommerz', nameVal: brandSslcommerzName, setName: setBrandSslcommerzName, logoVal: brandSslcommerzLogo, setLogo: setBrandSslcommerzLogo, color:'cyan' },
+ { label:'Razorpay', nameVal: brandRazorpayName, setName: setBrandRazorpayName, logoVal: brandRazorpayLogo, setLogo: setBrandRazorpayLogo, color:'blue' },
  ].map(({ label, nameVal, setName, logoVal, setLogo }) => (
  <div key={label} className="grid grid-cols-1 gap-2 bg-white border border-slate-100 rounded-lg p-2.5"> <div className="grid grid-cols-1 md:grid-cols-2 gap-2"> <div> <label className="block text-[9px] font-extrabold text-slate-500 uppercase mb-0.5">{label} — Button Name <span className="normal-case font-normal text-slate-400">(optional — leave blank for default)</span></label> <input
  type="text"
@@ -2549,6 +2567,8 @@ await saveSiteSettings(JSON.parse(JSON.stringify(current)));
  { label:'Stripe', val: btnColorStripe, set: setBtnColorStripe },
  { label:'bKash Auto', val: btnColorBkashAuto, set: setBtnColorBkashAuto },
  { label:'Nagad Auto', val: btnColorNagadAuto, set: setBtnColorNagadAuto },
+ { label:'SSLCommerz', val: btnColorSslcommerz, set: setBtnColorSslcommerz },
+ { label:'Razorpay', val: btnColorRazorpay, set: setBtnColorRazorpay },
  ] as { label: string; val: string; set: (v: string) => void }[]).map(({ label, val, set }) => (
  <div key={label} className="flex flex-col items-center gap-1.5 bg-white border border-slate-100 rounded-xl p-2.5"> <div className="w-8 h-8 rounded-lg shadow-sm border border-slate-200" style={{ backgroundColor: val }} /> <span className="text-[8px] font-bold uppercase text-slate-500 text-center leading-tight">{label}</span> <input type="color" value={val} onChange={(e) => set(e.target.value)}
  className="w-full h-6 rounded cursor-pointer border-0 p-0" title={label +" button color"} /> </div> ))}

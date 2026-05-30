@@ -347,6 +347,7 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
   // Email-OTP gate: admin enabled "Require Email Verification" + "Block Checkout
   // Until Verified", customer is not already a logged-in user whose email is
   // verified, and the email they typed hasn't been verified this session.
+  // FIXED: Skip email OTP if user is already logged in (they're already verified)
   const normalizedEmail = (email || '').trim().toLowerCase();
   const emailAlreadyVerified =
     !!normalizedEmail && (isEmailVerified(normalizedEmail) ||
@@ -354,7 +355,8 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
   const emailVerificationRequired =
     !!(emailVerificationSettings?.isEnabled &&
        emailVerificationSettings?.requireVerificationBeforeOrder) &&
-    !emailAlreadyVerified;
+    !emailAlreadyVerified &&
+    !isUserLoggedIn;  // ← FIXED: Skip OTP verification if user is already logged in
   
   // Interactive Automatic Gateway Simulation states
   const [isAutoPortalOpen, setIsAutoPortalOpen] = useState(false);
